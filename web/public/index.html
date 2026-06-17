@@ -167,6 +167,13 @@ a{color:var(--accent); text-decoration:none}
   color:var(--ink); font-family:var(--mono); font-size:11px; letter-spacing:.04em; padding:7px 11px;
   border-radius:9px; cursor:pointer; transition:border-color .25s}
 .pairbtn:hover{border-color:var(--accent)}
+.talk{appearance:none; border:1px solid var(--line); background:var(--surface-2); color:var(--ink);
+  font-family:var(--font); font-size:14px; font-weight:500; padding:12px 22px; border-radius:999px;
+  cursor:pointer; transition:all .25s; display:flex; align-items:center; gap:8px}
+.talk:hover{border-color:var(--accent)}
+.talk.listening{background:linear-gradient(180deg,var(--primary-hi),var(--primary)); border-color:transparent;
+  box-shadow:0 0 18px 1px oklch(0.60 0.18 25 / .6); animation:talkpulse 1.1s ease-in-out infinite}
+@keyframes talkpulse{0%,100%{box-shadow:0 0 14px 0 oklch(0.60 0.18 25 / .5)}50%{box-shadow:0 0 26px 4px oklch(0.66 0.19 25 / .8)}}
 
 @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){
@@ -193,6 +200,7 @@ a{color:var(--accent); text-decoration:none}
   <main>
     <section class="focal">
       <div class="orbwrap"><canvas id="orb"></canvas></div>
+      <button class="talk" id="talkBtn">🎤 Tap to talk</button>
       <div class="state" id="stateLbl">Idle</div>
       <div class="transcript" id="transcript">
         <div class="placeholder">Claudia speaks what matters — not the code.</div>
@@ -442,6 +450,22 @@ $("#voice").addEventListener("change",e=>postCfg({voice:e.target.value}));
 $("#sayBtn").addEventListener("click",()=>{ const v=$("#sayText").value; speak(v); $("#sayText").value=""; });
 $("#sayText").addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){ $("#sayBtn").click(); }});
 $("#stopBtn").addEventListener("click",stopSpeak);
+
+/* ---------- tap to talk: browser speech -> Claudia's agent (she acts on the Mac) ---------- */
+async function ask(text){ if(!text.trim())return; pushLine("You: " + text);
+  await fetch(api("/ask"),{method:"POST",headers:hdrs(),body:JSON.stringify({text})}); }
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec, listening=false;
+$("#talkBtn").addEventListener("click", ()=>{
+  if(!Rec){ alert("This browser can't do speech input. On the Mac, use the private local loop: run scripts/listen.sh and say 'hey claudia'."); return; }
+  if(listening){ try{ rec.stop(); }catch(e){} return; }
+  rec = new Rec(); rec.lang="en-US"; rec.interimResults=false; rec.maxAlternatives=1;
+  rec.onstart=()=>{ listening=true; $("#talkBtn").classList.add("listening"); $("#talkBtn").textContent="● Listening… tap to stop"; };
+  rec.onend=()=>{ listening=false; $("#talkBtn").classList.remove("listening"); $("#talkBtn").textContent="🎤 Tap to talk"; };
+  rec.onerror=()=>{ listening=false; $("#talkBtn").classList.remove("listening"); $("#talkBtn").textContent="🎤 Tap to talk"; };
+  rec.onresult=(e)=>{ ask(e.results[0][0].transcript); };
+  rec.start();
+});
 
 /* ---------- connect screen (remote / Vercel only) ---------- */
 function showConnect(){ $("#connect").classList.add("show"); $("#cBase").value = BASE||""; $("#cSecret").value = SECRET||""; }
