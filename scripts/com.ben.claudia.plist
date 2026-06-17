@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ben.claudia</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__ROOT__/scripts/start.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- 127.0.0.1 = local only. Set to 0.0.0.0 to reach Claudia over your Tailnet (phone/other Macs). -->
+    <key>CLAUDIA_HOST</key><string>127.0.0.1</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>__HOME__/.claudia/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/.claudia/logs/launchd.err.log</string>
+</dict>
+</plist>
