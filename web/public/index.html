@@ -159,6 +159,14 @@ a{color:var(--accent); text-decoration:none}
   border-radius:10px; padding:13px 14px; font-family:var(--font); font-size:15px}
 .connect-card input:focus-visible{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px oklch(0.80 0.14 65 / .18)}
 .connect-card .btn{width:100%; margin-top:20px; padding:14px}
+.connect-card details{margin-top:8px}
+.connect-card summary{font-family:var(--mono); font-size:11px; color:var(--muted); cursor:pointer; letter-spacing:.06em}
+.qr{background:#fff; border-radius:12px; padding:14px; width:fit-content; margin:6px auto 4px}
+.qr svg{display:block; width:230px; height:230px}
+.pairbtn{margin-top:4px; appearance:none; background:var(--surface-2); border:1px solid var(--line);
+  color:var(--ink); font-family:var(--mono); font-size:11px; letter-spacing:.04em; padding:7px 11px;
+  border-radius:9px; cursor:pointer; transition:border-color .25s}
+.pairbtn:hover{border-color:var(--accent)}
 
 @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){
@@ -178,6 +186,7 @@ a{color:var(--accent); text-decoration:none}
     <div class="status" id="status">
       <div class="row"><span id="connText">connecting…</span><span class="dot" id="connDot"></span></div>
       <div class="row" id="engLine">— · :4242</div>
+      <button class="pairbtn" id="pairBtn" hidden>📱 Pair a phone</button>
     </div>
   </header>
 
@@ -237,26 +246,53 @@ a{color:var(--accent); text-decoration:none}
 
 <div class="connect" id="connect">
   <div class="connect-card">
-    <h2>Link to your Mac</h2>
-    <p>Enter your Claudia daemon URL (your tunnel) and secret. Stored on this device only.</p>
-    <label>Daemon URL</label>
-    <input id="cBase" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
-           placeholder="https://claudia.yourname.com" />
-    <label>Secret</label>
-    <input id="cSecret" type="password" placeholder="shared secret" />
-    <button class="btn primary" id="cGo">Connect</button>
+    <h2>Connect this phone</h2>
+    <p>On your Mac, open Claudia and tap <b>Pair a phone</b>, then scan the code with your camera.
+       No codes to type. (Advanced: link manually below.)</p>
+    <details>
+      <summary>Link manually</summary>
+      <label>Daemon URL</label>
+      <input id="cBase" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+             placeholder="https://…trycloudflare.com" />
+      <label>Secret</label>
+      <input id="cSecret" type="password" placeholder="shared secret" />
+      <button class="btn primary" id="cGo">Connect</button>
+    </details>
   </div>
 </div>
 
+<div class="connect" id="pairModal">
+  <div class="connect-card">
+    <h2>Scan to pair</h2>
+    <p id="pairHint">Point your phone's camera at this code.</p>
+    <div id="qr" class="qr"></div>
+    <button class="btn ghost" id="pairClose">Done</button>
+  </div>
+</div>
+
+<script src="/qrcode.min.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const isLocal = ["localhost","127.0.0.1","::1"].includes(location.hostname);
 // Served from the daemon itself -> same-origin control client. Served from Vercel -> remote client
 // pointing at the user's tunneled daemon URL + secret (entered once on the phone, stored locally).
+const APP_URL = "https://claudia-voice-benmburgess-8525s-projects.vercel.app";
 let BASE = isLocal ? location.origin : (localStorage.getItem("claudia_base") || "");
 let SECRET = isLocal ? "" : (localStorage.getItem("claudia_secret") || "");
 const ROLE = isLocal ? "control" : "remote";
 let dragging = false, ws, cfg = {};
+
+// SCAN-TO-PAIR: a QR opens this app with #base=...&secret=... -> auto-connect, no typing/jargon.
+if (!isLocal && location.hash.length > 1) {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get("base")) {
+    BASE = decodeURIComponent(h.get("base"));
+    SECRET = decodeURIComponent(h.get("secret") || "");
+    localStorage.setItem("claudia_base", BASE);
+    localStorage.setItem("claudia_secret", SECRET);
+    history.replaceState(null, "", location.pathname);
+  }
+}
 
 const api = p => BASE + p;
 const hdrs = (extra={}) => Object.assign({"Content-Type":"application/json"},
@@ -420,9 +456,25 @@ $("#cGo").addEventListener("click", async ()=>{
 });
 $("#connText").addEventListener("click", ()=>{ if(!isLocal) showConnect(); });  // tap status to re-link
 
+/* ---------- pair-a-phone (QR, local client only) ---------- */
+$("#pairBtn").addEventListener("click", ()=>{
+  if(!cfg.public_url){
+    $("#qr").innerHTML=""; $("#pairHint").textContent =
+      "Start the tunnel first: run  bash scripts/tunnel.sh  in Terminal, then tap this again.";
+    $("#pairModal").classList.add("show"); return;
+  }
+  const url = `${APP_URL}#base=${encodeURIComponent(cfg.public_url)}&secret=${encodeURIComponent(cfg.shared_secret||"")}`;
+  const qr = qrcode(0, "M"); qr.addData(url); qr.make();
+  $("#qr").innerHTML = qr.createSvgTag({cellSize:6, margin:2, scalable:true});
+  $("#pairHint").textContent = "Open your phone camera and point it at this code.";
+  $("#pairModal").classList.add("show");
+});
+$("#pairClose").addEventListener("click", ()=> $("#pairModal").classList.remove("show"));
+
 /* ---------- boot ---------- */
 async function boot(){
   if(!isLocal && !BASE){ showConnect(); return; }
+  if(isLocal){ $("#pairBtn").hidden = false; }   // only the Mac shows "Pair a phone"
   try{ const h=await getJSON("/health"); buildEngines(h.engines||["macos_say"], "kokoro"); }
   catch(e){ if(!isLocal){ showConnect(); return; } }
   try{ applyConfig(await getJSON("/config")); }catch(e){}

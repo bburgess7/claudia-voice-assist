@@ -18,6 +18,7 @@ DEFAULTS: Dict[str, Any] = {
     "summarizer_model": "llama3.2:3b",  # local Ollama model for the spoken filter
     "wake_word": "hey claudia",
     "shared_secret": "",        # optional token required on remote WS connections
+    "public_url": "",           # current tunnel URL (set by scripts/tunnel.sh) — used for QR pairing
 }
 
 _lock = threading.Lock()

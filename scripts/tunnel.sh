@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Expose the local Claudia daemon to the internet via a Cloudflare quick tunnel, so the Vercel-hosted
-# control panel (on your phone) can reach it — no Tailscale needed. Ensures a shared secret is set
-# first, then prints the tunnel URL + secret to paste into the phone's connect screen.
+# Expose the local Claudia daemon via a Cloudflare quick tunnel so the hosted control panel (on your
+# phone) can reach it — no Tailscale. Ensures a shared secret, then REGISTERS the public URL with the
+# daemon so the Mac HUD shows a "scan to pair" QR — the phone just scans it (no typing, no jargon).
 #
-# Quick tunnels are ephemeral (new URL each run, no account needed). For a STABLE URL, set up a named
-# tunnel against one of your domains: see https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+# Quick tunnels are ephemeral. For a STABLE phone link, use scripts/tunnel-named.sh (a Cloudflare
+# named tunnel on your own domain) instead.
 set -uo pipefail
 PORT="${CLAUDIA_PORT:-4242}"
 DAEMON="http://127.0.0.1:$PORT"
@@ -17,15 +17,30 @@ SECRET=$(curl -s "$DAEMON/config" | python3 -c "import sys,json;print(json.load(
 if [ -z "$SECRET" ]; then
   SECRET=$(python3 -c "import secrets;print(secrets.token_urlsafe(18))")
   curl -s -X POST "$DAEMON/config" -H 'Content-Type: application/json' -d "{\"shared_secret\":\"$SECRET\"}" >/dev/null
-  echo "Generated a shared secret."
 fi
 
-echo "────────────────────────────────────────────────────────"
-echo " Starting Cloudflare tunnel to $DAEMON ..."
-echo " When the https://...trycloudflare.com URL appears below:"
-echo "   1. Open the control panel on your phone: the Vercel URL"
-echo "   2. On its connect screen, paste:"
-echo "        Daemon URL : <the trycloudflare URL>"
-echo "        Secret     : $SECRET"
-echo "────────────────────────────────────────────────────────"
-exec cloudflared tunnel --url "$DAEMON"
+LOG=$(mktemp)
+cleanup(){ curl -s -X POST "$DAEMON/config" -H 'Content-Type: application/json' -d '{"public_url":""}' >/dev/null 2>&1; rm -f "$LOG"; }
+trap cleanup EXIT INT TERM
+
+echo "Starting tunnel… the pairing QR will appear in the control panel on your Mac."
+cloudflared tunnel --url "$DAEMON" >"$LOG" 2>&1 &
+CF_PID=$!
+
+# watch for the public URL, then register it with the daemon (HUD renders the QR from it)
+for i in $(seq 1 40); do
+  URL=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$LOG" 2>/dev/null | head -1)
+  if [ -n "$URL" ]; then
+    curl -s -X POST "$DAEMON/config" -H 'Content-Type: application/json' -d "{\"public_url\":\"$URL\"}" >/dev/null
+    echo "────────────────────────────────────────────────────────"
+    echo "  Tunnel live: $URL"
+    echo "  On your Mac, open the control panel ($DAEMON) and tap 'Pair a phone' —"
+    echo "  then scan the QR with your phone's camera. That's it."
+    echo "  (Manual fallback — URL: $URL  secret: $SECRET)"
+    echo "────────────────────────────────────────────────────────"
+    break
+  fi
+  sleep 1
+done
+
+wait "$CF_PID"
