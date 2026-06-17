@@ -473,8 +473,13 @@ $("#pairClose").addEventListener("click", ()=> $("#pairModal").classList.remove(
 
 /* ---------- boot ---------- */
 async function boot(){
-  if(!isLocal && !BASE){ showConnect(); return; }
-  if(isLocal){ $("#pairBtn").hidden = false; }   // only the Mac shows "Pair a phone"
+  // Prefer SAME-ORIGIN: works locally, and when the daemon is served directly behind Cloudflare-Access
+  // SSO (a stable URL) — then there's no secret to type, Access already proved who you are.
+  if(!BASE || BASE !== location.origin){
+    try{ const r = await fetch(location.origin + "/health"); if(r.ok){ BASE = location.origin; if(!isLocal) SECRET = ""; } }catch(e){}
+  }
+  if(!isLocal && !BASE){ showConnect(); return; }   // remote static app, not yet paired
+  if(isLocal){ $("#pairBtn").hidden = false; }       // only the Mac shows "Pair a phone"
   try{ const h=await getJSON("/health"); buildEngines(h.engines||["macos_say"], "kokoro"); }
   catch(e){ if(!isLocal){ showConnect(); return; } }
   try{ applyConfig(await getJSON("/config")); }catch(e){}

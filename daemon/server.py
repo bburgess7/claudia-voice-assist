@@ -37,19 +37,35 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"], allow_credentials=False)
 
 
-def require_secret(request: Request, x_claudia_secret: str = Header(default="")):
-    """Gate actions when a shared secret is set — but ONLY for proxied/tunneled requests.
+def _proxied(headers) -> bool:
+    return bool(headers.get("x-forwarded-for") or headers.get("cf-connecting-ip")
+                or headers.get("cf-access-authenticated-user-email"))
 
-    Direct local requests (the same-origin control panel on the Mac) carry no forwarding headers and
-    stay exempt, so they work without a secret. Anything arriving via a tunnel/proxy (Cloudflare adds
-    cf-connecting-ip; reverse proxies add x-forwarded-for) must present the matching secret.
-    """
-    secret = config.get("shared_secret")
-    if not secret:
-        return
-    proxied = bool(request.headers.get("x-forwarded-for") or request.headers.get("cf-connecting-ip"))
-    if proxied and x_claudia_secret != secret:
-        raise HTTPException(status_code=401, detail="bad or missing secret")
+
+def _authorized(headers, secret_value: str = "") -> bool:
+    """Decide if a request may act. Local (direct) requests are always allowed. Remote requests must
+    pass EITHER Cloudflare-Access SSO (preferred, 'super secure') OR the shared secret."""
+    if not _proxied(headers):
+        return True                                   # direct local request
+    allow = (config.get("access_email") or "").strip().lower()
+    secret = config.get("shared_secret") or ""
+    if not allow and not secret:
+        return True                                   # no auth configured at all (open quick tunnel)
+    # SSO path: Cloudflare Access injects the verified email (not forgeable through the tunnel).
+    if allow:
+        cf_email = (headers.get("cf-access-authenticated-user-email") or "").strip().lower()
+        if cf_email and cf_email == allow:
+            return True
+    # secret path (quick tunnel, no SSO)
+    if secret and secret_value == secret:
+        return True
+    return False                                      # auth configured but not satisfied -> reject
+
+
+def require_secret(request: Request, x_claudia_secret: str = Header(default="")):
+    """Gate actions: local is open; remote needs Cloudflare-Access SSO or the shared secret."""
+    if not _authorized(request.headers, x_claudia_secret):
+        raise HTTPException(status_code=401, detail="unauthorized")
 
 
 speech = SpeechManager()
@@ -157,20 +173,23 @@ async def set_config(request: Request):
 async def ws(websocket: WebSocket):
     await websocket.accept()
     client = {"ws": websocket, "role": "control"}
-    proxied = bool(websocket.headers.get("x-forwarded-for") or websocket.headers.get("cf-connecting-ip"))
-    secret = config.get("shared_secret") if proxied else ""  # local WS is exempt (same as REST)
-    # First frame may be a hello carrying {secret?, role?}. Required only for proxied/tunneled clients.
+    remote = _proxied(websocket.headers)
+    # First frame may be a hello carrying {secret?, role?}. Auth required only for remote clients
+    # (local is open); remote passes via Cloudflare-Access SSO or the shared secret.
     try:
         first = await asyncio.wait_for(websocket.receive_json(), timeout=5)
         if first.get("type") == "hello":
-            if secret and first.get("secret") != secret:
+            if not _authorized(websocket.headers, first.get("secret", "")):
                 await websocket.close(code=4401)
                 return
             client["role"] = "remote" if first.get("role") == "remote" else "control"
             first = None  # consumed
+        elif remote and not _authorized(websocket.headers, ""):
+            await websocket.close(code=4401)
+            return
     except asyncio.TimeoutError:
         first = None
-        if secret:
+        if remote and not _authorized(websocket.headers, ""):
             await websocket.close(code=4401)
             return
     except Exception:

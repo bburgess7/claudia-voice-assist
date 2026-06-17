@@ -18,8 +18,11 @@ DEFAULTS: Dict[str, Any] = {
     "summarizer_model": "llama3.2:3b",  # local Ollama model for the spoken filter
     "agent_model": "qwen3-vl:30b",       # local Ollama tool-calling model for agentic /ask requests
     "wake_word": "hey claudia",
-    "shared_secret": "",        # optional token required on remote WS connections
-    "public_url": "",           # current tunnel URL (set by scripts/tunnel.sh) — used for QR pairing
+    "shared_secret": "",        # token for the quick-tunnel path (no SSO)
+    "access_email": "",         # SSO: when set, remote requests authenticated by Cloudflare Access
+                                # as this email are allowed (no secret needed). "super secure" path.
+    "public_url": "",           # current tunnel URL (set by tunnel scripts) — used for QR pairing
+    "sso": False,               # True when behind Cloudflare Access (QR omits the secret)
 }
 
 _lock = threading.Lock()
