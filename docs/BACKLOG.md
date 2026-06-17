@@ -21,7 +21,10 @@ Captured from Ben's feedback; not yet built (or only partially).
 
 ## Voice / agent
 - [ ] Faster agent brain (qwen2.5:7b) — pull in progress; swap default when ready.
-- [ ] Barge-in in conversation mode (interrupt Claudia by talking).
+- [x] Button barge-in: pressing the hotkey instantly stops her current speech (done).
+- [ ] Voice-only barge-in (she stops the moment you START talking, no button). DEFERRED on purpose —
+      Ben's experience: it tends to DEGRADE UX (false interrupts from her own audio / room noise) and
+      really needs headphones + echo cancellation. Only revisit if explicitly wanted.
 - [ ] Sub-250ms Kyutai streaming via aggressive quantization.
 - [ ] Approval flow for write/destructive actions (currently blocked outright).
 
