@@ -60,7 +60,7 @@ def daemon(path, payload=None, method="POST"):
     try:
         req = urllib.request.Request(DAEMON + path, data=data, method=method,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=180) as r:  # /ask (agent) can take a while
             return json.loads(r.read())
     except Exception:
         return {}
@@ -86,14 +86,15 @@ def ask_brain(text):
 
 
 def respond(text):
-    """Send a command transcript to the brain and speak the reply."""
+    """Send a spoken command to Claudia's AGENT (she can act on the Mac), which speaks the result."""
     if not text or muted():
         return
     print(f"[you] {text}", flush=True)
-    reply = ask_brain(text)
+    # /ask runs the tool-using agent and speaks the result itself
+    r = daemon("/ask", {"text": text})
+    reply = (r or {}).get("spoken", "")
     if reply:
         print(f"[claudia] {reply}", flush=True)
-        daemon("/say", {"text": reply})
     time.sleep(0.4)
 
 

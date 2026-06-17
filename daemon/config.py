@@ -16,6 +16,7 @@ DEFAULTS: Dict[str, Any] = {
     "verbosity": "summary",     # verbatim | summary | headline — how much to read
     "muted": False,             # global on/off for speaking
     "summarizer_model": "llama3.2:3b",  # local Ollama model for the spoken filter
+    "agent_model": "qwen3-vl:30b",       # local Ollama tool-calling model for agentic /ask requests
     "wake_word": "hey claudia",
     "shared_secret": "",        # optional token required on remote WS connections
     "public_url": "",           # current tunnel URL (set by scripts/tunnel.sh) — used for QR pairing

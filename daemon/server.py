@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
+from . import agent
 from .engines import get_engine, available
 from .speech import SpeechManager
 
@@ -117,6 +118,21 @@ async def say(body: SpeakBody):
 async def stop():
     speech.interrupt()
     return {"ok": True}
+
+
+@app.post("/ask", dependencies=[Depends(require_secret)])
+async def ask(body: SpeakBody):
+    """Agentic: Claudia uses tools to DO something, then speaks the result."""
+    model = config.get("agent_model")
+
+    def on_step(name, args):
+        _broadcast({"type": "action", "tool": name, "args": args})
+
+    result = await asyncio.to_thread(agent.run_agent, body.text, model, on_step)
+    spoken = result.get("spoken", "")
+    if spoken:
+        speech.enqueue(spoken, mode="verbatim")   # agent already wrote spoken-ready prose
+    return result
 
 
 @app.get("/voices", dependencies=[Depends(require_secret)])
