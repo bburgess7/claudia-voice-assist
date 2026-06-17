@@ -42,7 +42,8 @@ MODIFIERS = {
     "shift_r": (60, Quartz.kCGEventFlagMaskShift),
     "fn": (63, Quartz.kCGEventFlagMaskSecondaryFn),
 }
-HOTKEY_NAME = os.environ.get("CLAUDIA_HOTKEY", "cmd_r")          # default: Right Command (non-text)
+HOTKEY_NAME = os.environ.get("CLAUDIA_HOTKEY", "alt_r")          # default: Right Option (non-text;
+# avoids Right Command which macOS often maps to "double-press for Siri", and Fn which triggers Dictation)
 _kc_override = os.environ.get("CLAUDIA_HOTKEY_KEYCODE")          # advanced: a raw text-key keycode
 if _kc_override:
     MODIFIER_MODE, KEYCODE, MOD_FLAG = False, int(_kc_override), 0
