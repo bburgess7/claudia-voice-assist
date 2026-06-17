@@ -11,18 +11,21 @@ Built for an M4 Pro / 48GB. Everything runs locally; Tailscale is the only path 
 
 ## What it does (Goal 1)
 
-- 🗣️ **Talks back, naturally** — default voice **Kokoro** (kokoro-onnx, ~170MB, ~4× real-time,
-  rock-solid). Swappable: macOS `say` (zero-dep fallback), Kyutai/Orpheus as upgrades.
+- 🗣️ **Talks back, naturally** — three swappable, isolated engines: **Kokoro** (default; kokoro-onnx,
+  ~170MB, ~1.4s/sentence, rock-solid), **Kyutai** (moshi-mlx 1.6B, richer conversational voice;
+  `scripts/kyutai.sh`), and macOS `say` (zero-dep fallback). Pick live in the HUD.
 - 🧠 **Reads only the critical bits** — an LLM filter (local `llama3.2:3b` via Ollama) turns
   code-heavy output into a spoken headline. Three levels: `verbatim` / `summary` / `headline`.
 - 🎚️ **Live speed + voice control** — a sci-fi HUD with a rate slider (0.5×–2×), voice picker,
   verbosity, engine, mute, and a reactive ember orb that lights up when she speaks.
-- 👂 **Wake word → conversation** — say **"hey jarvis"** ("hey claudia" trainable) and she listens,
-  thinks (local LLM), and replies aloud. (`scripts/listen.sh`)
+- 👂 **"Hey Claudia" → conversation** — default `keyword` wake mode spots **"hey claudia"** with no
+  training; single-breath commands work ("Hey Claudia, what's the status?"). `oww` mode uses
+  openWakeWord "hey jarvis" for lowest CPU. Then STT → local LLM → spoken reply (`scripts/listen.sh`).
 - 🌍 **Global** — `claudia` CLI on PATH, speak-the-selection hotkey, optional menu-bar app, and a
   Claude Code hook so every session narrates itself.
-- 📱 **Mobile + remote** — the control panel is an installable PWA; opened over Tailscale it plays
-  audio on the phone (role-aware, no echo on the Mac).
+- 📱 **Mobile** — the HUD is **hosted on Vercel** and reaches your Mac through a Cloudflare tunnel
+  (`scripts/tunnel.sh`), gated by a shared secret; opened remotely it plays audio on the phone.
+  Live: https://claudia-voice-benmburgess-8525s-projects.vercel.app
 
 ## Portable & extensible (Goal 2)
 
