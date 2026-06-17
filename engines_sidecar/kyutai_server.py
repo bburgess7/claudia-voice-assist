@@ -16,6 +16,7 @@ import io
 import json
 import os
 import threading
+import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -102,6 +103,49 @@ def _synth(text, voice):
         return np.array(mx.clip(wav, -1, 1)).reshape(-1), mimi.sample_rate
 
 
+def _speak_stream(text, voice):
+    """STREAMING: decode + play each frame as it's generated (low time-to-first-audio). Returns the
+    measured time-to-first-audio in seconds."""
+    import sounddevice as sd
+    with _lock:
+        tts, mimi = _tts, _tts.mimi
+        entries = tts.prepare_script([text], padding_between=1)
+        if tts.multi_speaker:
+            attrs = tts.make_condition_attributes([tts.get_voice_path(voice)], _cfg["cond"])
+            prefixes = None
+        else:
+            attrs = tts.make_condition_attributes([], _cfg["cond"])
+            prefixes = [tts.get_prefix(hf_get(voice, DEFAULT_DSM_TTS_VOICE_REPO,
+                                              check_local_file_exists=True))]
+        # frames covered by the voice-prefix must be skipped (they're the conditioning audio)
+        skip = 0
+        if prefixes is not None:
+            skip = int(prefixes[0].shape[-1])
+        out = sd.OutputStream(samplerate=mimi.sample_rate, channels=1, dtype="float32",
+                              blocksize=1920)
+        out.start()
+        state = {"seen": 0, "t0": None, "tfa": None}
+
+        def on_frame(frame):
+            f = mx.array(frame)[:, :, None]   # match the shape decode_step expects (see TTSModel.generate)
+            i = state["seen"]; state["seen"] += 1
+            if i < skip:
+                _ = mimi.decode_step(f)       # keep decoder state in sync, don't play prefix
+                return
+            pcm = np.array(mx.clip(mimi.decode_step(f), -1, 1)).reshape(-1).astype("float32")
+            if state["t0"] is None:
+                state["t0"] = time.time()
+                state["tfa"] = state["t0"] - state["start"]
+            out.write(pcm)
+
+        state["start"] = time.time()
+        tts.generate([entries], [attrs], prefixes=prefixes,
+                     cfg_is_no_prefix=_cfg["no_prefix"], cfg_is_no_text=_cfg["no_text"],
+                     on_frame=on_frame)
+        out.stop(); out.close()
+        return state["tfa"] or 0.0
+
+
 def _wav_bytes(samples, sr):
     pcm = (np.clip(samples, -1, 1) * 32767).astype(np.int16)
     buf = io.BytesIO()
@@ -127,14 +171,20 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/tts":
+        if self.path not in ("/tts", "/speak"):
             return self._json(404, {"error": "not found"})
         if _state["loading"]:
             return self._json(503, {"error": "model loading"})
         n = int(self.headers.get("Content-Length", 0))
         try:
             req = json.loads(self.rfile.read(n) or b"{}")
-            samples, sr = _synth((req.get("text") or "").strip(), req.get("voice") or VOICES[0]["id"])
+            text = (req.get("text") or "").strip()
+            voice = req.get("voice") or VOICES[0]["id"]
+            if self.path == "/speak":
+                # STREAMING local playback — lowest time-to-first-audio
+                tfa = _speak_stream(text, voice)
+                return self._json(200, {"ok": True, "time_to_first_audio": round(tfa, 3)})
+            samples, sr = _synth(text, voice)            # /tts -> full WAV (for remote/WS)
             wav = _wav_bytes(samples, sr)
             self.send_response(200); self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(wav))); self.end_headers(); self.wfile.write(wav)

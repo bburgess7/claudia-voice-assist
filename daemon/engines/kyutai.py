@@ -27,7 +27,14 @@ class KyutaiEngine(TTSEngine):
             return r.read()
 
     def speak_local(self, text: str, voice: Optional[str] = None, rate: float = 1.0) -> None:
-        player.play_wav_bytes(self._synth(text, voice, rate))
+        # STREAMING path: the sidecar generates + plays frame-by-frame (low time-to-first-audio).
+        try:
+            body = json.dumps({"text": text, "voice": voice}).encode()
+            req = urllib.request.Request(SIDECAR + "/speak", data=body,
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=120).read()
+        except Exception:
+            player.play_wav_bytes(self._synth(text, voice, rate))   # fallback: batch + afplay
 
     def synthesize_wav(self, text: str, voice: Optional[str] = None, rate: float = 1.0) -> bytes:
         return self._synth(text, voice, rate)
