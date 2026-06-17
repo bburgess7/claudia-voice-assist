@@ -25,7 +25,9 @@ import sounddevice as sd
 from pynput import keyboard
 
 DAEMON = os.environ.get("CLAUDIA_URL", "http://127.0.0.1:4242")
-HOTKEY_NAME = os.environ.get("CLAUDIA_HOTKEY", "alt_r")     # right option by default
+# Right Command by default: it's on the MacBook keyboard and (unlike Right Option) doesn't type
+# accented characters when held alone. Override with CLAUDIA_HOTKEY (any pynput Key name, e.g. alt_r).
+HOTKEY_NAME = os.environ.get("CLAUDIA_HOTKEY", "cmd_r")
 HOLD_THRESHOLD = 0.35      # held longer than this = push-to-talk; shorter = a tap
 DOUBLE_TAP = 0.40          # two taps within this window = toggle conversation
 SR = 16000

@@ -7,9 +7,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 ./.venv-listen/bin/python -m pip -q install pynput >/dev/null
 pkill -f "talk_hotkey.py" 2>/dev/null || true
 nohup ./.venv-listen/bin/python hotkey/talk_hotkey.py >"$HOME/.claudia/logs/hotkey.log" 2>&1 &
-echo "✅ Hotkey daemon launched. Default key: RIGHT OPTION (⌥)."
-echo "   • HOLD ⌥ to talk, release to send."
-echo "   • DOUBLE-TAP ⌥ to toggle hands-free conversation."
+echo "✅ Hotkey daemon launched. Default key: RIGHT COMMAND (⌘)."
+echo "   • HOLD ⌘ to talk, release to send."
+echo "   • DOUBLE-TAP ⌘ to toggle hands-free conversation."
 echo ""
 echo "⚠️  First time: grant Accessibility permission to your terminal app, or the keys won't register."
 echo "   Opening that settings pane now — add/enable your terminal, then re-run this script."
