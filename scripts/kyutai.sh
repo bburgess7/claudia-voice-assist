@@ -6,5 +6,5 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${CLAUDIA_KYUTAI_PORT:-4244}"
 LOGDIR="$HOME/.claudia/logs"; mkdir -p "$LOGDIR"
 echo "[kyutai] starting sidecar on :$PORT (first run downloads the model; watch $LOGDIR/kyutai.log)"
-HF_HUB_DISABLE_XET=1 CLAUDIA_KYUTAI_PORT="$PORT" \
+HF_HUB_DISABLE_XET=1 HF_HUB_DOWNLOAD_TIMEOUT=120 CLAUDIA_KYUTAI_PORT="$PORT" \
   exec "$ROOT/.venv-kyutai/bin/python" "$ROOT/engines_sidecar/kyutai_server.py"

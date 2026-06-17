@@ -1,30 +1,41 @@
 # Claudia 🔴
 
-A local, **Jarvis-style conversational voice layer** for your Mac. She speaks back — naturally,
-fast, and fully on-device — and she says *only what matters*: in Claude Code she narrates the
-result ("18 tests passed, deploy?"), not the raw code. Talk to her with a wake word, control her
-from a HUD, and reach her from your phone over Tailscale.
+A local, **Jarvis-style conversational voice layer** for your Mac. She speaks back — fully on-device —
+and she says *only what matters*: in Claude Code she narrates the result ("18 tests passed, deploy?"),
+not the raw code (and never reads secrets, keys, or file paths aloud — that's enforced, with tests).
+Talk to her with a wake word, control her from a HUD, and reach her from your phone by scanning a QR.
 
-Built for an M4 Pro / 48GB. Everything runs locally; Tailscale is the only path in from outside.
+Built and tested on an M4 Pro / 48GB. Everything runs locally; the only path in from outside is a
+tunnel you start, gated by a secret.
+
+## Install (anyone, fresh Mac)
+```bash
+git clone https://github.com/bburgess7/claudia-voice-assist
+cd claudia-voice-assist && bash setup.sh        # daemon + Kokoro voice + CLI
+bash scripts/start.sh                            # then open http://127.0.0.1:4242
+```
 
 ---
 
 ## What it does (Goal 1)
 
-- 🗣️ **Talks back, naturally** — three swappable, isolated engines: **Kokoro** (default; kokoro-onnx,
-  ~170MB, ~1.4s/sentence, rock-solid), **Kyutai** (moshi-mlx 1.6B, richer conversational voice;
-  `scripts/kyutai.sh`), and macOS `say` (zero-dep fallback). Pick live in the HUD.
-- 🧠 **Reads only the critical bits** — an LLM filter (local `llama3.2:3b` via Ollama) turns
-  code-heavy output into a spoken headline. Three levels: `verbatim` / `summary` / `headline`.
-- 🎚️ **Live speed + voice control** — a sci-fi HUD with a rate slider (0.5×–2×), voice picker,
-  verbosity, engine, mute, and a reactive ember orb that lights up when she speaks.
+- 🗣️ **Talks back** — three swappable, isolated engines: **Kokoro** (default; kokoro-onnx, ~340MB,
+  fast and dependable), **Kyutai** (moshi-mlx 1.6B, richer voice; heavier/slower — `scripts/kyutai.sh`),
+  and macOS `say` (zero-dep fallback). Pick live in the HUD.
+- 🧠 **Reads only the critical bits — and never secrets** — a local `llama3.2:3b` filter turns
+  code-heavy output into a spoken headline. Secrets/keys/tokens/file-paths are **redacted before the
+  model sees them and again on output**; pure code becomes "made some code changes." Levels:
+  `verbatim` / `summary` / `headline`. (See `tests/test_summarizer.py`.)
+- 🎚️ **Live speed + voice control** — a HUD with a rate slider (0.5×–2×), voice picker, verbosity,
+  engine, mute, and a reactive ember orb that lights up when she speaks.
 - 👂 **"Hey Claudia" → conversation** — default `keyword` wake mode spots **"hey claudia"** with no
   training; single-breath commands work ("Hey Claudia, what's the status?"). `oww` mode uses
   openWakeWord "hey jarvis" for lowest CPU. Then STT → local LLM → spoken reply (`scripts/listen.sh`).
-- 🌍 **Global** — `claudia` CLI on PATH, speak-the-selection hotkey, optional menu-bar app, and a
-  Claude Code hook so every session narrates itself.
-- 📱 **Mobile** — the HUD is **hosted on Vercel** and reaches your Mac through a Cloudflare tunnel
-  (`scripts/tunnel.sh`), gated by a shared secret; opened remotely it plays audio on the phone.
+  *(Verify with a real mic; the loop is built and component-tested but mic round-trips depend on your setup.)*
+- 🌍 **Global** — `claudia` CLI on PATH and a Claude Code hook so every session narrates itself.
+  Also a speak-the-selection hotkey (one-time macOS Shortcut) and an optional menu-bar app.
+- 📱 **Mobile, scan to pair** — the HUD is **hosted on Vercel**; start `scripts/tunnel.sh`, tap
+  **"Pair a phone"** on the Mac, and scan the QR — no URLs or secrets to type.
   Live: https://claudia-voice-benmburgess-8525s-projects.vercel.app
 
 ## Portable & extensible (Goal 2)
