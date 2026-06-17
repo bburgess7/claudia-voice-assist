@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 
 import rumps
 from hotkey.talk_hotkey import Hotkey, prompt_accessibility
+from app.floating import FloatingWidget
 
 DAEMON = os.environ.get("CLAUDIA_URL", "http://127.0.0.1:4242")
 
@@ -48,6 +49,7 @@ class ClaudiaApp(rumps.App):
         prompt_accessibility()                       # pop the macOS permission prompt if needed
         self.hotkey_ok = self.hotkey.install()       # host the key tap on the main run loop
         self._spin = 0
+        self.widget = None                           # floating dot, created once the loop is running
         rumps.Timer(self.refresh, 2).start()
 
     def _safe(self, fn, *a):
@@ -57,25 +59,37 @@ class ClaudiaApp(rumps.App):
             return None
 
     def refresh(self, _=None):
+        if self.widget is None:
+            try:
+                self.widget = FloatingWidget(self)
+            except Exception:
+                self.widget = False                  # don't keep retrying if it can't be created
+        state = "off"
         try:
             h = call("GET", "/health", timeout=3)
             c = call("GET", "/config", timeout=3)
             muted = c.get("muted")
             if not self.hotkey_ok:
                 self.title = "🔑"; self.status_item.title = "Grant Accessibility, then relaunch (hotkey off)"
+                state = "nokey"
             elif muted:
-                self.title = "🔇"; self.status_item.title = "Muted — tap to unmute"
+                self.title = "🔇"; self.status_item.title = "Muted — tap to unmute"; state = "muted"
             elif self.hotkey.conversation:
-                self.title = "🎙️"; self.status_item.title = "Conversation mode — just talk"
+                self.title = "🎙️"; self.status_item.title = "Conversation mode — just talk"; state = "on"
             elif h.get("speaking"):
                 self._spin = (self._spin + 1) % 3
-                self.title = "◌◍◎"[self._spin]; self.status_item.title = "Speaking…"
+                self.title = "◌◍◎"[self._spin]; self.status_item.title = "Speaking…"; state = "speaking"
             else:
-                self.title = "◉"; self.status_item.title = f"On · {c.get('engine')} · hold ` to talk"
+                self.title = "◉"; self.status_item.title = f"On · {c.get('engine')} · hold ` to talk"; state = "on"
             self.mute_item.title = "Unmute" if muted else "Mute"
             self.conv_item.state = 1 if self.hotkey.conversation else 0
         except Exception:
-            self.title = "⚠"; self.status_item.title = "Daemon off — run start.sh"
+            self.title = "⚠"; self.status_item.title = "Daemon off — run start.sh"; state = "off"
+        if self.widget:
+            try:
+                self.widget.set_state(state)
+            except Exception:
+                pass
 
     def toggle_mute(self, _):
         c = self._safe(call, "GET", "/config") or {}

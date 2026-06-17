@@ -73,11 +73,10 @@ def daemon_speaking() -> bool:
 
 
 class Recorder:
+    """Opens the mic ONLY while recording (no persistent orange 'listening' dot / no always-on mic)."""
     def __init__(self):
         self.frames, self.active, self._lock = [], False, threading.Lock()
-        self.stream = sd.InputStream(samplerate=SR, channels=1, dtype="int16",
-                                     blocksize=1280, callback=self._cb)
-        self.stream.start()
+        self.stream = None
 
     def _cb(self, indata, frames, t, status):
         if self.active:
@@ -88,9 +87,19 @@ class Recorder:
         with self._lock:
             self.frames = []
         self.active = True
+        if self.stream is None:
+            self.stream = sd.InputStream(samplerate=SR, channels=1, dtype="int16",
+                                         blocksize=1280, callback=self._cb)
+            self.stream.start()
 
     def stop(self) -> np.ndarray:
         self.active = False
+        if self.stream is not None:
+            try:
+                self.stream.stop(); self.stream.close()
+            except Exception:
+                pass
+            self.stream = None            # releases the mic -> orange dot goes away
         with self._lock:
             return np.concatenate(self.frames) if self.frames else np.zeros(0, dtype="int16")
 
