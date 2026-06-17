@@ -61,8 +61,11 @@ class FloatingWidget:
         self.win.setCollectionBehavior_(
             NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary)
         try:
-            scr = NSScreen.mainScreen().frame()
-            self.win.setFrameOrigin_(NSPoint(scr.size.width - 78, scr.size.height - 150))
+            # visibleFrame accounts for the menu bar/dock AND the screen's real origin (multi-display).
+            vf = NSScreen.mainScreen().visibleFrame()
+            x = vf.origin.x + vf.size.width - 70
+            y = vf.origin.y + vf.size.height - 64
+            self.win.setFrameOrigin_(NSPoint(x, y))
         except Exception:
             pass
 
