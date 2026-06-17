@@ -8,7 +8,7 @@ becomes portable.
 
 Stdlib only (no mcp SDK) — implements the minimal JSON-RPC: initialize, tools/list, tools/call.
 Register with Claude Code:
-  claude mcp add claudia -- /usr/bin/python3 /Users/benburgess/dev/claudia/rival/mcp_server.py
+  claude mcp add claudia -- /usr/bin/python3 /Users/benburgess/dev/claudia-voice-assist/rival/mcp_server.py
 """
 import json
 import os

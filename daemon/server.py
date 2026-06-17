@@ -17,8 +17,9 @@ import base64
 import os
 from typing import List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import JSONResponse
+from fastapi import (FastAPI, WebSocket, WebSocketDisconnect, Request, Header, HTTPException,
+                     Depends)
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -29,6 +30,19 @@ from .speech import SpeechManager
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "public")
 
 app = FastAPI(title="claudiad")
+# The shared secret is the real gate when the daemon is reached over a tunnel, so wildcard CORS is
+# fine (no cookies/credentials are used). Lets the Vercel-hosted UI call the tunneled daemon.
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
+                   allow_headers=["*"], allow_credentials=False)
+
+
+def require_secret(x_claudia_secret: str = Header(default="")):
+    """Gate mutating/reading actions when a shared secret is configured."""
+    secret = config.get("shared_secret")
+    if secret and x_claudia_secret != secret:
+        raise HTTPException(status_code=401, detail="bad or missing secret")
+
+
 speech = SpeechManager()
 # each client: {"ws": WebSocket, "role": "control" | "remote"}
 #   control  -> sees transcript/config only; audio plays on the host's speakers (no echo)

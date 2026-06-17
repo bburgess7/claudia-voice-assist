@@ -17,7 +17,7 @@ claudia voices | config | status
 **Shortcuts** app (no extra software, no accessibility hacks):
 
 1. Shortcuts → new shortcut → add **Run Shell Script** action:
-   `bash /Users/benburgess/dev/claudia/scripts/speak-selection.sh`
+   `bash /Users/benburgess/dev/claudia-voice-assist/scripts/speak-selection.sh`
    (use `... speak-selection.sh summary` to summarize long passages instead of reading verbatim)
 2. Shortcut → Details → **Add Keyboard Shortcut** → e.g. ⌃⌥S.
 3. Now: select/copy text in any app, hit the hotkey → Claudia speaks it.

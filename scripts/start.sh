@@ -23,4 +23,5 @@ for i in $(seq 1 60); do
 done
 
 echo "[claudia] starting daemon on $HOST:$PORT ..."
-exec "$ROOT/.venv/bin/uvicorn" daemon.server:app --host "$HOST" --port "$PORT" --log-level warning
+# invoke via python -m (relocation-safe; console-script shebangs bake the venv's original path)
+exec "$ROOT/.venv/bin/python" -m uvicorn daemon.server:app --host "$HOST" --port "$PORT" --log-level warning

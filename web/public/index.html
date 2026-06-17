@@ -145,6 +145,21 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 footer{font-family:var(--mono); font-size:10.5px; color:var(--muted); opacity:.6; text-align:center; letter-spacing:.06em}
 a{color:var(--accent); text-decoration:none}
 
+/* connect overlay (remote/Vercel) */
+.connect{position:fixed; inset:0; z-index:var(--z-dialog); display:none; align-items:center; justify-content:center;
+  padding:24px; background:oklch(0.06 0.004 30 / .82); backdrop-filter:blur(8px)}
+.connect.show{display:flex}
+.connect-card{width:min(420px,100%); background:linear-gradient(180deg,var(--surface),oklch(0.14 0.01 30));
+  border:1px solid var(--line); border-radius:18px; padding:26px}
+.connect-card h2{font-weight:500; font-size:22px; margin-bottom:6px}
+.connect-card p{color:var(--muted); font-size:13px; line-height:1.5; margin-bottom:18px}
+.connect-card label{display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.18em;
+  text-transform:uppercase; color:var(--muted); margin:12px 0 6px}
+.connect-card input{width:100%; background:var(--surface-2); color:var(--ink); border:1px solid var(--line);
+  border-radius:10px; padding:13px 14px; font-family:var(--font); font-size:15px}
+.connect-card input:focus-visible{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px oklch(0.80 0.14 65 / .18)}
+.connect-card .btn{width:100%; margin-top:20px; padding:14px}
+
 @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){
   *{animation-duration:.01ms!important; animation-delay:0ms!important; transition-duration:.01ms!important}
@@ -217,25 +232,45 @@ a{color:var(--accent); text-decoration:none}
     </section>
   </main>
 
-  <footer id="foot">claudiad · reachable on your Tailnet · audio plays where it's needed</footer>
+  <footer id="foot">claudiad · audio plays where it's needed · tap status to re-link</footer>
+</div>
+
+<div class="connect" id="connect">
+  <div class="connect-card">
+    <h2>Link to your Mac</h2>
+    <p>Enter your Claudia daemon URL (your tunnel) and secret. Stored on this device only.</p>
+    <label>Daemon URL</label>
+    <input id="cBase" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+           placeholder="https://claudia.yourname.com" />
+    <label>Secret</label>
+    <input id="cSecret" type="password" placeholder="shared secret" />
+    <button class="btn primary" id="cGo">Connect</button>
+  </div>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
 const isLocal = ["localhost","127.0.0.1","::1"].includes(location.hostname);
-const ROLE = isLocal ? "control" : "remote";   // remote clients (phone) play audio in-browser
-const api = p => location.origin + p;
+// Served from the daemon itself -> same-origin control client. Served from Vercel -> remote client
+// pointing at the user's tunneled daemon URL + secret (entered once on the phone, stored locally).
+let BASE = isLocal ? location.origin : (localStorage.getItem("claudia_base") || "");
+let SECRET = isLocal ? "" : (localStorage.getItem("claudia_secret") || "");
+const ROLE = isLocal ? "control" : "remote";
 let dragging = false, ws, cfg = {};
 
+const api = p => BASE + p;
+const hdrs = (extra={}) => Object.assign({"Content-Type":"application/json"},
+                                          SECRET ? {"x-claudia-secret":SECRET} : {}, extra);
+
 /* ---------- REST helpers ---------- */
-async function getJSON(p){ const r = await fetch(api(p)); return r.json(); }
+async function getJSON(p){ const r = await fetch(api(p),{headers:hdrs()}); if(!r.ok) throw new Error(r.status); return r.json(); }
 async function postCfg(patch){
-  const r = await fetch(api("/config"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});
+  const r = await fetch(api("/config"),{method:"POST",headers:hdrs(),body:JSON.stringify(patch)});
   return r.json();
 }
 async function speak(text){ if(!text.trim())return;
-  await fetch(api("/speak"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})}); }
-async function stopSpeak(){ await fetch(api("/stop"),{method:"POST"}); audioStop(); }
+  await fetch(api("/speak"),{method:"POST",headers:hdrs(),body:JSON.stringify({text})}); }
+async function stopSpeak(){ await fetch(api("/stop"),{method:"POST",headers:hdrs()}); audioStop(); }
 
 /* ---------- UI sync ---------- */
 function applyConfig(c){
@@ -285,11 +320,14 @@ function setSpeaking(on){ speaking=on; target.amp = on?0.6:0;
 
 /* ---------- websocket ---------- */
 function connect(){
-  const proto = location.protocol==="https:"?"wss":"ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = ()=>{ ws.send(JSON.stringify({type:"hello", role:ROLE}));
+  if(!BASE){ showConnect(); return; }
+  let host; try{ host = new URL(BASE).host; }catch(e){ showConnect(); return; }
+  const proto = (new URL(BASE)).protocol==="https:"?"wss":"ws";
+  ws = new WebSocket(`${proto}://${host}/ws`);
+  ws.onopen = ()=>{ ws.send(JSON.stringify({type:"hello", role:ROLE, secret:SECRET}));
     $("#connDot").classList.add("on"); $("#connText").textContent = ROLE==="remote"?"linked (remote)":"linked"; };
   ws.onclose = ()=>{ $("#connDot").classList.remove("on"); $("#connText").textContent="reconnecting…"; setTimeout(connect,1500); };
+  ws.onerror = ()=>{ try{ ws.close(); }catch(e){} };
   ws.onmessage = ev=>{
     const m = JSON.parse(ev.data);
     if(m.type==="config") applyConfig(m.config);
@@ -369,12 +407,30 @@ $("#sayBtn").addEventListener("click",()=>{ const v=$("#sayText").value; speak(v
 $("#sayText").addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){ $("#sayBtn").click(); }});
 $("#stopBtn").addEventListener("click",stopSpeak);
 
+/* ---------- connect screen (remote / Vercel only) ---------- */
+function showConnect(){ $("#connect").classList.add("show"); $("#cBase").value = BASE||""; $("#cSecret").value = SECRET||""; }
+function hideConnect(){ $("#connect").classList.remove("show"); }
+$("#cGo").addEventListener("click", async ()=>{
+  let b = $("#cBase").value.trim().replace(/\/+$/,"");
+  if(b && !/^https?:\/\//.test(b)) b = "https://"+b;
+  SECRET = $("#cSecret").value.trim();
+  BASE = b;
+  localStorage.setItem("claudia_base", BASE); localStorage.setItem("claudia_secret", SECRET);
+  hideConnect(); await boot();
+});
+$("#connText").addEventListener("click", ()=>{ if(!isLocal) showConnect(); });  // tap status to re-link
+
 /* ---------- boot ---------- */
-(async function(){
-  resize(); requestAnimationFrame(draw);
-  try{ const h=await getJSON("/health"); buildEngines(h.engines||["macos_say"], "kokoro"); }catch(e){}
+async function boot(){
+  if(!isLocal && !BASE){ showConnect(); return; }
+  try{ const h=await getJSON("/health"); buildEngines(h.engines||["macos_say"], "kokoro"); }
+  catch(e){ if(!isLocal){ showConnect(); return; } }
   try{ applyConfig(await getJSON("/config")); }catch(e){}
   connect();
+}
+(async function(){
+  resize(); requestAnimationFrame(draw);
+  await boot();
   if("serviceWorker" in navigator){ navigator.serviceWorker.register("/sw.js").catch(()=>{}); }
 })();
 </script>
