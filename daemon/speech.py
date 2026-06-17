@@ -33,6 +33,7 @@ class SpeechManager:
         # callbacks the server registers: (wav_bytes, utterance) for remote fan-out, and transcript
         self.on_audio: Optional[Callable[[bytes, Utterance], None]] = None
         self.on_transcript: Optional[Callable[[str, str], None]] = None  # (raw, spoken)
+        self.on_idle: Optional[Callable[[], None]] = None
         self.has_remote: Callable[[], bool] = lambda: False
 
     def enqueue(self, text: str, mode: Optional[str] = None) -> str:
@@ -77,3 +78,5 @@ class SpeechManager:
                 pass
             finally:
                 self.speaking = False
+                if self._q.empty() and self.on_idle:
+                    self.on_idle()

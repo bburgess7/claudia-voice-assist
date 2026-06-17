@@ -30,7 +30,10 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "publi
 
 app = FastAPI(title="claudiad")
 speech = SpeechManager()
-_clients: List[WebSocket] = []
+# each client: {"ws": WebSocket, "role": "control" | "remote"}
+#   control  -> sees transcript/config only; audio plays on the host's speakers (no echo)
+#   remote   -> also receives streamed audio frames to play in-browser (phone / other computer)
+_clients: List[dict] = []
 _loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -39,20 +42,22 @@ class SpeakBody(BaseModel):
     mode: Optional[str] = None  # verbatim | summary | headline; default = config.verbosity
 
 
-def _broadcast(payload: dict) -> None:
-    """Thread-safe push to all connected WS clients."""
+def _broadcast(payload: dict, role: Optional[str] = None) -> None:
+    """Thread-safe push to connected WS clients. If `role` is set, only clients of that role."""
     if not _clients or _loop is None:
         return
     async def _send():
         dead = []
-        for ws in list(_clients):
+        for c in list(_clients):
+            if role and c["role"] != role:
+                continue
             try:
-                await ws.send_json(payload)
+                await c["ws"].send_json(payload)
             except Exception:
-                dead.append(ws)
-        for ws in dead:
-            if ws in _clients:
-                _clients.remove(ws)
+                dead.append(c)
+        for c in dead:
+            if c in _clients:
+                _clients.remove(c)
     asyncio.run_coroutine_threadsafe(_send(), _loop)
 
 
@@ -61,11 +66,12 @@ async def _startup():
     global _loop
     _loop = asyncio.get_running_loop()
     config.load()
-    speech.has_remote = lambda: len(_clients) > 0
+    speech.has_remote = lambda: any(c["role"] == "remote" for c in _clients)
     speech.on_transcript = lambda raw, spoken: _broadcast(
         {"type": "transcript", "spoken": spoken, "speaking": True})
+    speech.on_idle = lambda: _broadcast({"type": "idle", "speaking": False})
     speech.on_audio = lambda wav, utt: _broadcast(
-        {"type": "audio", "wav": base64.b64encode(wav).decode()})
+        {"type": "audio", "wav": base64.b64encode(wav).decode()}, role="remote")
 
 
 @app.get("/health")
@@ -112,21 +118,35 @@ async def set_config(request: Request):
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
+    client = {"ws": websocket, "role": "control"}
     secret = config.get("shared_secret")
-    if secret:
-        try:
-            hello = await asyncio.wait_for(websocket.receive_json(), timeout=5)
-            if hello.get("secret") != secret:
+    # First frame may be a hello carrying {secret?, role?}. Required only if a secret is set.
+    try:
+        first = await asyncio.wait_for(websocket.receive_json(), timeout=5)
+        if first.get("type") == "hello":
+            if secret and first.get("secret") != secret:
                 await websocket.close(code=4401)
                 return
-        except Exception:
+            client["role"] = "remote" if first.get("role") == "remote" else "control"
+            first = None  # consumed
+    except asyncio.TimeoutError:
+        first = None
+        if secret:
             await websocket.close(code=4401)
             return
-    _clients.append(websocket)
+    except Exception:
+        await websocket.close(code=4401)
+        return
+
+    _clients.append(client)
     await websocket.send_json({"type": "config", "config": config.all()})
     try:
+        pending = first
         while True:
-            msg = await websocket.receive_json()
+            msg = pending if pending else await websocket.receive_json()
+            pending = None
+            if not msg:
+                continue
             t = msg.get("type")
             if t == "speak":
                 speech.enqueue(msg.get("text", ""), msg.get("mode"))
@@ -135,13 +155,14 @@ async def ws(websocket: WebSocket):
             elif t == "stop":
                 speech.interrupt()
             elif t == "config":
-                config.update(msg.get("config", {}))
+                new = config.update(msg.get("config", {}))
+                _broadcast({"type": "config", "config": new})
             # t == "mic": reserved for streaming STT (listening side)
     except WebSocketDisconnect:
         pass
     finally:
-        if websocket in _clients:
-            _clients.remove(websocket)
+        if client in _clients:
+            _clients.remove(client)
 
 
 if os.path.isdir(WEB_DIR):
