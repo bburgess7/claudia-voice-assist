@@ -17,7 +17,7 @@ DEFAULTS: Dict[str, Any] = {
     "muted": False,             # global on/off for speaking
     "call_guard": True,         # auto-stay-silent while you're in a call (no surprise interruptions)
     "summarizer_model": "llama3.2:3b",  # local Ollama model for the spoken filter
-    "agent_model": "qwen3-vl:30b",       # local Ollama tool-calling model for agentic /ask requests
+    "agent_model": "qwen2.5:7b-instruct",       # local Ollama tool-calling model for agentic /ask requests
     "wake_word": "hey claudia",
     "shared_secret": "",        # token for the quick-tunnel path (no SSO)
     "access_email": "",         # SSO: when set, remote requests authenticated by Cloudflare Access
