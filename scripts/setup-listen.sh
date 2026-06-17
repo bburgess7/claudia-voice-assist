@@ -4,6 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 PY="${PY:-/opt/homebrew/bin/python3.12}"
 "$PY" -m venv .venv-listen
-./.venv-listen/bin/pip -q install --upgrade pip
-./.venv-listen/bin/pip -q install openwakeword sounddevice faster-whisper numpy
+./.venv-listen/bin/python -m pip -q install --upgrade pip
+./.venv-listen/bin/python -m pip -q install openwakeword sounddevice faster-whisper numpy
 echo "✅ listen ready. Grant mic permission, then: bash scripts/listen.sh"

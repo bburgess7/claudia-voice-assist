@@ -23,14 +23,14 @@ ollama pull llama3.2:3b
 # --- daemon venv (lean, no ML) ---------------------------------------------------------------
 say "Creating the daemon environment…"
 "$PY" -m venv .venv
-./.venv/bin/pip -q install --upgrade pip
-./.venv/bin/pip -q install fastapi "uvicorn[standard]" websockets httpx
+./.venv/bin/python -m pip -q install --upgrade pip
+./.venv/bin/python -m pip -q install fastapi "uvicorn[standard]" websockets httpx
 
 # --- Kokoro voice sidecar (kokoro-onnx) ------------------------------------------------------
 say "Creating the Kokoro voice environment + fetching the model (~340MB)…"
 "$PY" -m venv .venv-kokoro
-./.venv-kokoro/bin/pip -q install --upgrade pip
-./.venv-kokoro/bin/pip -q install kokoro-onnx soundfile numpy
+./.venv-kokoro/bin/python -m pip -q install --upgrade pip
+./.venv-kokoro/bin/python -m pip -q install kokoro-onnx soundfile numpy
 base="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 [ -f .venv-kokoro/kokoro-v1.0.onnx ] || curl -sL -o .venv-kokoro/kokoro-v1.0.onnx "$base/kokoro-v1.0.onnx"
 [ -f .venv-kokoro/voices-v1.0.bin ] || curl -sL -o .venv-kokoro/voices-v1.0.bin "$base/voices-v1.0.bin"
