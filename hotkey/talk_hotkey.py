@@ -31,24 +31,21 @@ from AppKit import NSWorkspace
 
 DAEMON = os.environ.get("CLAUDIA_URL", "http://127.0.0.1:4242")
 
-# Non-text MODIFIER keys (held alone -> no typing, no side effects). Detected via flagsChanged, never
-# consumed. This is the clean default. name -> (keycode, flag-mask).
+# Non-text MODIFIER keys (held alone -> no typing, no side effects). Detected by the DEVICE-SPECIFIC
+# flag bit that CGEventGetFlags sets while that exact physical key is down (robust on press AND release,
+# distinguishes left/right). name -> device flag mask (NX_DEVICE*KEYMASK).
 MODIFIERS = {
-    "cmd_r": (54, Quartz.kCGEventFlagMaskCommand),
-    "cmd_l": (55, Quartz.kCGEventFlagMaskCommand),
-    "alt_r": (61, Quartz.kCGEventFlagMaskAlternate),
-    "alt_l": (58, Quartz.kCGEventFlagMaskAlternate),
-    "ctrl_r": (62, Quartz.kCGEventFlagMaskControl),
-    "shift_r": (60, Quartz.kCGEventFlagMaskShift),
-    "fn": (63, Quartz.kCGEventFlagMaskSecondaryFn),
+    "ctrl_l": 0x00000001, "shift_l": 0x00000002, "shift_r": 0x00000004,
+    "cmd_l": 0x00000008, "cmd_r": 0x00000010, "alt_l": 0x00000020,
+    "alt_r": 0x00000040, "ctrl_r": 0x00002000, "fn": 0x00800000,
 }
 HOTKEY_NAME = os.environ.get("CLAUDIA_HOTKEY", "alt_l")          # Left Option (non-text). avoids Right
-# Command (macOS "double-press for Siri") and Fn (Dictation). alt_l/alt_r selectable via CLAUDIA_HOTKEY.
+# Command (macOS "double-press for Siri") and Fn (Dictation). any name above selectable via CLAUDIA_HOTKEY.
 _kc_override = os.environ.get("CLAUDIA_HOTKEY_KEYCODE")          # advanced: a raw text-key keycode
 if _kc_override:
     MODIFIER_MODE, KEYCODE, MOD_FLAG = False, int(_kc_override), 0
 elif HOTKEY_NAME in MODIFIERS:
-    MODIFIER_MODE, (KEYCODE, MOD_FLAG) = True, MODIFIERS[HOTKEY_NAME]
+    MODIFIER_MODE, KEYCODE, MOD_FLAG = True, 0, MODIFIERS[HOTKEY_NAME]
 else:
     MODIFIER_MODE, KEYCODE, MOD_FLAG = False, 50, 0              # fall back to backtick
 HOLD_THRESHOLD = 0.35
@@ -76,7 +73,10 @@ def _dbg(msg):
 
 
 def cue(sound="Tink"):
-    subprocess.run(["afplay", f"/System/Library/Sounds/{sound}.aiff"], stderr=subprocess.DEVNULL)
+    # NON-blocking: afplay must never block the event-tap callback, or macOS disables the tap.
+    threading.Thread(target=lambda: subprocess.run(
+        ["afplay", f"/System/Library/Sounds/{sound}.aiff"], stderr=subprocess.DEVNULL),
+        daemon=True).start()
 
 
 def wav_bytes(int16: np.ndarray) -> bytes:
@@ -228,18 +228,26 @@ class Hotkey:
                 self._reinject_grave()                   # text-key only: a tap types the char
 
     def callback(self, proxy, type_, event, refcon):
+        # If macOS disabled the tap (callback took too long, or user input), re-enable it immediately.
+        if type_ in (Quartz.kCGEventTapDisabledByTimeout, Quartz.kCGEventTapDisabledByUserInput):
+            if getattr(self, "_tap", None) is not None:
+                Quartz.CGEventTapEnable(self._tap, True)
+                _dbg("tap re-enabled")
+            return event
         try:
             keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
         except Exception:
             return event
 
         if MODIFIER_MODE:                                # clean path: a modifier held alone
-            if type_ != Quartz.kCGEventFlagsChanged or keycode != KEYCODE:
+            if type_ != Quartz.kCGEventFlagsChanged:
                 return event
-            down = bool(Quartz.CGEventGetFlags(event) & MOD_FLAG)
+            down = bool(Quartz.CGEventGetFlags(event) & MOD_FLAG)   # device-specific: this exact key
             if down and not self.is_down:
+                _dbg("MOD press")
                 self._press()
             elif not down and self.is_down:
+                _dbg("MOD release")
                 self._release()
             return event                                 # never consume a modifier
 
