@@ -113,6 +113,20 @@ class Recorder:
         return self.stop()
 
 
+def prompt_accessibility() -> bool:
+    """Actually POP the macOS 'allow accessibility' prompt (not the silent check). Returns trust state."""
+    try:
+        from ApplicationServices import AXIsProcessTrustedWithOptions
+        # kAXTrustedCheckOptionPrompt -> True makes the system show the prompt + open the pane
+        return bool(AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True}))
+    except Exception:
+        try:
+            from ApplicationServices import AXIsProcessTrusted
+            return bool(AXIsProcessTrusted())
+        except Exception:
+            return False
+
+
 def _frontmost_is_editor() -> bool:
     try:
         app = NSWorkspace.sharedWorkspace().frontmostApplication()
@@ -199,18 +213,28 @@ class Hotkey:
                 while self.conversation and daemon_speaking():
                     time.sleep(0.2)
 
-    def run(self):
+    def install(self, runloop=None) -> bool:
+        """Create the key tap and add it to a run loop (default: the MAIN loop, so it can be hosted
+        inside a menu-bar app). Returns True if the tap was created (i.e. Accessibility is granted)."""
         mask = Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown) | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
         tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
             Quartz.kCGEventTapOptionDefault, mask, self.callback, None)
         if not tap:
+            return False
+        src = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+        Quartz.CFRunLoopAddSource(runloop or Quartz.CFRunLoopGetMain(), src,
+                                  Quartz.kCFRunLoopCommonModes)
+        Quartz.CGEventTapEnable(tap, True)
+        self._tap, self._src = tap, src
+        return True
+
+    def run(self):
+        prompt_accessibility()
+        if not self.install(Quartz.CFRunLoopGetCurrent()):
             print("[hotkey] ⚠️  Could not create the key tap — grant ACCESSIBILITY permission to this "
                   "app (System Settings → Privacy & Security → Accessibility), then restart.", flush=True)
             return
-        src = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
-        Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), src, Quartz.kCFRunLoopCommonModes)
-        Quartz.CGEventTapEnable(tap, True)
         print("[hotkey] ready. HOLD ` to talk; DOUBLE-TAP ` for conversation. (` types normally in "
               "editors/terminals.)", flush=True)
         Quartz.CFRunLoopRun()
