@@ -1,0 +1,17 @@
+# venvs
+.venv/
+.venv-*/
+
+# model files (downloaded by setup; too big for git)
+*.onnx
+*.bin
+engines_sidecar/models/
+
+# runtime
+__pycache__/
+*.pyc
+.DS_Store
+
+# local config / logs
+.claudia/
+*.log

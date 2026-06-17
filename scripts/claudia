@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""claudia — CLI for the local voice daemon.
+
+  claudia say "hello"          speak (summarized per current verbosity)
+  echo "..." | claudia say     speak text from stdin
+  claudia read "..."           speak verbatim (no summarizing)
+  claudia stop                 interrupt current + queued speech
+  claudia mute  | unmute       toggle speaking
+  claudia speed 1.5            set speaking-rate multiplier (0.5-2.0)
+  claudia voice <id>           set voice
+  claudia verbosity headline   verbatim | summary | headline
+  claudia engine kyutai        switch TTS engine
+  claudia voices               list voices for the active engine
+  claudia config               print current config
+  claudia status               daemon health
+"""
+import json
+import os
+import sys
+import urllib.request
+
+DAEMON = os.environ.get("CLAUDIA_URL", "http://127.0.0.1:4242")
+
+
+def call(method, path, payload=None):
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(DAEMON + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+
+def main(argv):
+    if not argv:
+        print(__doc__)
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd in ("say", "read"):
+            text = " ".join(rest) if rest else sys.stdin.read()
+            mode = "verbatim" if cmd == "read" else None
+            print(call("POST", "/speak", {"text": text, "mode": mode}).get("spoken", ""))
+        elif cmd == "stop":
+            call("POST", "/stop", {}); print("stopped")
+        elif cmd in ("mute", "unmute"):
+            call("POST", "/config", {"muted": cmd == "mute"}); print(cmd)
+        elif cmd == "speed":
+            print(call("POST", "/config", {"rate": float(rest[0])}).get("rate"))
+        elif cmd == "voice":
+            print(call("POST", "/config", {"voice": rest[0]}).get("voice"))
+        elif cmd == "verbosity":
+            print(call("POST", "/config", {"verbosity": rest[0]}).get("verbosity"))
+        elif cmd == "engine":
+            print(call("POST", "/config", {"engine": rest[0]}).get("engine"))
+        elif cmd == "voices":
+            for v in call("GET", "/voices").get("voices", []):
+                print(f"  {v['id']:<28} {v.get('label','')}")
+        elif cmd == "config":
+            print(json.dumps(call("GET", "/config"), indent=2))
+        elif cmd == "status":
+            print(json.dumps(call("GET", "/health"), indent=2))
+        else:
+            print(__doc__); return 1
+    except urllib.error.URLError:
+        print("claudia: daemon not reachable. Start it with: claudiad", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
