@@ -36,10 +36,18 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"], allow_credentials=False)
 
 
-def require_secret(x_claudia_secret: str = Header(default="")):
-    """Gate mutating/reading actions when a shared secret is configured."""
+def require_secret(request: Request, x_claudia_secret: str = Header(default="")):
+    """Gate actions when a shared secret is set — but ONLY for proxied/tunneled requests.
+
+    Direct local requests (the same-origin control panel on the Mac) carry no forwarding headers and
+    stay exempt, so they work without a secret. Anything arriving via a tunnel/proxy (Cloudflare adds
+    cf-connecting-ip; reverse proxies add x-forwarded-for) must present the matching secret.
+    """
     secret = config.get("shared_secret")
-    if secret and x_claudia_secret != secret:
+    if not secret:
+        return
+    proxied = bool(request.headers.get("x-forwarded-for") or request.headers.get("cf-connecting-ip"))
+    if proxied and x_claudia_secret != secret:
         raise HTTPException(status_code=401, detail="bad or missing secret")
 
 
@@ -93,35 +101,35 @@ async def health():
     return {"ok": True, "engines": available(), "speaking": speech.speaking}
 
 
-@app.post("/speak")
+@app.post("/speak", dependencies=[Depends(require_secret)])
 async def speak(body: SpeakBody):
     spoken = speech.enqueue(body.text, body.mode)
     return {"spoken": spoken}
 
 
-@app.post("/say")
+@app.post("/say", dependencies=[Depends(require_secret)])
 async def say(body: SpeakBody):
     spoken = speech.enqueue(body.text, mode="verbatim")
     return {"spoken": spoken}
 
 
-@app.post("/stop")
+@app.post("/stop", dependencies=[Depends(require_secret)])
 async def stop():
     speech.interrupt()
     return {"ok": True}
 
 
-@app.get("/voices")
+@app.get("/voices", dependencies=[Depends(require_secret)])
 async def voices():
     return {"engine": config.get("engine"), "voices": get_engine(config.get("engine")).list_voices()}
 
 
-@app.get("/config")
+@app.get("/config", dependencies=[Depends(require_secret)])
 async def get_config():
     return config.all()
 
 
-@app.post("/config")
+@app.post("/config", dependencies=[Depends(require_secret)])
 async def set_config(request: Request):
     patch = await request.json()
     new = config.update(patch)
@@ -133,8 +141,9 @@ async def set_config(request: Request):
 async def ws(websocket: WebSocket):
     await websocket.accept()
     client = {"ws": websocket, "role": "control"}
-    secret = config.get("shared_secret")
-    # First frame may be a hello carrying {secret?, role?}. Required only if a secret is set.
+    proxied = bool(websocket.headers.get("x-forwarded-for") or websocket.headers.get("cf-connecting-ip"))
+    secret = config.get("shared_secret") if proxied else ""  # local WS is exempt (same as REST)
+    # First frame may be a hello carrying {secret?, role?}. Required only for proxied/tunneled clients.
     try:
         first = await asyncio.wait_for(websocket.receive_json(), timeout=5)
         if first.get("type") == "hello":
