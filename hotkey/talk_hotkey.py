@@ -94,13 +94,15 @@ def send_to_claudia(int16: np.ndarray):
         req = urllib.request.Request(DAEMON + "/talk", data=wav_bytes(int16),
                                      headers={"Content-Type": "application/octet-stream"})
         body = urllib.request.urlopen(req, timeout=180).read()
-        try:
-            r = __import__("json").loads(body)
-            _dbg(f"talk: heard={r.get('heard')!r} spoken={r.get('spoken')!r}")
-        except Exception:
-            _dbg(f"talk raw response: {body[:200]}")
+        if DEBUG:
+            try:
+                r = __import__("json").loads(body)
+                _dbg(f"talk: heard={r.get('heard')!r} spoken={r.get('spoken')!r}")
+            except Exception:
+                _dbg(f"talk raw response: {body[:200]}")
     except Exception as e:
-        _dbg(f"send error: {e}")
+        if DEBUG:
+            _dbg(f"send error: {e}")
 
 
 def daemon_speaking() -> bool:
@@ -109,6 +111,15 @@ def daemon_speaking() -> bool:
             return bool(json.loads(r.read()).get("speaking"))
     except Exception:
         return False
+
+
+def stop_speaking():
+    """Barge-in: interrupt whatever Claudia is currently saying (fire-and-forget)."""
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request(DAEMON + "/stop", data=b"", method="POST"), timeout=3).read()
+    except Exception:
+        pass
 
 
 class Recorder:
@@ -203,6 +214,8 @@ class Hotkey:
         if not self.is_down:
             self.is_down = True
             self.down_at = time.time()
+            # barge-in: the instant you press to talk, cut off whatever she's saying
+            threading.Thread(target=stop_speaking, daemon=True).start()
             if not self.conversation:
                 self.rec.start()
 
@@ -244,10 +257,8 @@ class Hotkey:
                 return event
             down = bool(Quartz.CGEventGetFlags(event) & MOD_FLAG)   # device-specific: this exact key
             if down and not self.is_down:
-                _dbg("MOD press")
                 self._press()
             elif not down and self.is_down:
-                _dbg("MOD release")
                 self._release()
             return event                                 # never consume a modifier
 
