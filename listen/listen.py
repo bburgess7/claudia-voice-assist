@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""Claudia's ears — wake-word -> listen -> think -> reply, fully local.
+"""Claudia's ears — wake -> listen -> think -> reply, fully local. Optional sidecar (.venv-listen).
 
-Optional sidecar (its own venv .venv-listen). Pipeline:
-    openWakeWord ("hey jarvis" by default)  ->  energy-VAD capture  ->  faster-whisper STT
-    ->  local LLM brain (Ollama, Claudia persona)  ->  daemon /say  ->  Claudia speaks.
+Two wake modes (CLAUDIA_WAKE_MODE):
+  keyword  (default)  Custom phrase "hey claudia" with NO training: energy-VAD captures each
+                      utterance, faster-whisper transcribes it, and if it starts with the wake
+                      phrase we act. Bonus: a single-breath command ("Hey Claudia, what's the
+                      status?") is handled in one turn — the words after the phrase ARE the command.
+  oww                 openWakeWord pretrained model (e.g. hey_jarvis) — lowest CPU, fixed phrases.
 
-Nothing here imports into the daemon; it only calls the daemon's HTTP API to speak. So even if the
-audio stack misbehaves, the core voice/daemon is untouched.
+Pipeline after wake: faster-whisper STT -> local Ollama brain (Claudia persona) -> daemon /say.
+Nothing here imports into the daemon; it only calls the daemon's HTTP API to speak.
 
-Run:  ./.venv-listen/bin/python listen/listen.py
-Env:  CLAUDIA_WAKE (default hey_jarvis), CLAUDIA_BRAIN (Ollama model, default llama3.2:3b),
-      CLAUDIA_STT (default base.en), CLAUDIA_URL (default http://127.0.0.1:4242)
+Run:  bash scripts/listen.sh        (needs mic permission for the terminal)
+Env:  CLAUDIA_WAKE_MODE (keyword|oww), CLAUDIA_WAKE_PHRASE ("hey claudia"),
+      CLAUDIA_WAKE (oww model, default hey_jarvis), CLAUDIA_BRAIN (Ollama model),
+      CLAUDIA_STT (default base.en), CLAUDIA_URL
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -23,16 +28,20 @@ import numpy as np
 import sounddevice as sd
 
 DAEMON = os.environ.get("CLAUDIA_URL", "http://127.0.0.1:4242")
-WAKE = os.environ.get("CLAUDIA_WAKE", "hey_jarvis")     # pretrained openWakeWord model
-BRAIN = os.environ.get("CLAUDIA_BRAIN", "llama3.2:3b")  # local Ollama chat model
+WAKE_MODE = os.environ.get("CLAUDIA_WAKE_MODE", "keyword")
+WAKE_PHRASE = os.environ.get("CLAUDIA_WAKE_PHRASE", "hey claudia").lower()
+OWW_MODEL = os.environ.get("CLAUDIA_WAKE", "hey_jarvis")
+BRAIN = os.environ.get("CLAUDIA_BRAIN", "llama3.2:3b")
 STT_MODEL = os.environ.get("CLAUDIA_STT", "base.en")
-WAKE_THRESHOLD = float(os.environ.get("CLAUDIA_WAKE_THRESHOLD", "0.5"))
+OWW_THRESHOLD = float(os.environ.get("CLAUDIA_WAKE_THRESHOLD", "0.5"))
 
 SR = 16000
-FRAME = 1280              # 80ms @ 16kHz — openWakeWord's expected chunk
+FRAME = 1280              # 80ms @ 16kHz
 SILENCE_RMS = 350         # int16 RMS below this counts as silence
-SILENCE_HANG = 0.9        # seconds of trailing silence that ends a turn
-MAX_TURN = 9.0            # hard cap on a single utterance
+SILENCE_HANG = 0.9        # trailing silence that ends a turn (s)
+MAX_TURN = 9.0
+# accept the wake phrase or close variants Whisper may emit ("hey, claudia", "hey cloudia", "claudia")
+WAKE_RE = re.compile(r"^\W*(hey\W+)?cl?[ao]udi?a\b[\s,.:!?-]*", re.IGNORECASE)
 
 PERSONA = (
     "You are Claudia, a warm, sharp, concise voice assistant running locally on Ben's Mac. You are "
@@ -43,9 +52,7 @@ PERSONA = (
 
 
 def cue():
-    # non-verbal "I'm listening" so we don't talk over the user
-    subprocess.run(["afplay", "/System/Library/Sounds/Tink.aiff"],
-                   stderr=subprocess.DEVNULL)
+    subprocess.run(["afplay", "/System/Library/Sounds/Tink.aiff"], stderr=subprocess.DEVNULL)
 
 
 def daemon(path, payload=None, method="POST"):
@@ -78,67 +85,93 @@ def ask_brain(text):
         return ""
 
 
-def main():
+def respond(text):
+    """Send a command transcript to the brain and speak the reply."""
+    if not text or muted():
+        return
+    print(f"[you] {text}", flush=True)
+    reply = ask_brain(text)
+    if reply:
+        print(f"[claudia] {reply}", flush=True)
+        daemon("/say", {"text": reply})
+    time.sleep(0.4)
+
+
+class Mic:
+    def __init__(self):
+        self.stream = sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=FRAME)
+        self.stream.start()
+
+    def frame(self):
+        data, _ = self.stream.read(FRAME)
+        return data[:, 0]
+
+    def capture_utterance(self, first=None):
+        """Record from now until trailing silence; return float32 audio."""
+        buf = [first] if first is not None else [self.frame()]
+        t0 = last_voice = time.time()
+        while True:
+            f = self.frame()
+            buf.append(f)
+            if float(np.sqrt(np.mean(f.astype(np.float32) ** 2))) > SILENCE_RMS:
+                last_voice = time.time()
+            if time.time() - last_voice > SILENCE_HANG or time.time() - t0 > MAX_TURN:
+                break
+        return np.concatenate(buf).astype(np.float32) / 32768.0
+
+
+def transcribe(stt, audio):
+    segments, _ = stt.transcribe(audio, language="en", vad_filter=True)
+    return " ".join(s.text for s in segments).strip()
+
+
+def run_keyword(mic, stt):
+    print(f"[listen] keyword mode — say '{WAKE_PHRASE}'.", flush=True)
+    while True:
+        f = mic.frame()
+        if float(np.sqrt(np.mean(f.astype(np.float32) ** 2))) <= SILENCE_RMS:
+            continue
+        audio = mic.capture_utterance(first=f)        # grab the whole spoken phrase
+        text = transcribe(stt, audio)
+        if not text:
+            continue
+        m = WAKE_RE.match(text)
+        if not m:
+            continue
+        daemon("/stop")                                # barge-in
+        command = text[m.end():].strip()
+        if command:                                    # single-breath: "Hey Claudia, do X"
+            respond(command)
+        else:                                          # just the wake word -> capture the command
+            cue()
+            respond(transcribe(stt, mic.capture_utterance()))
+
+
+def run_oww(mic, stt):
     from openwakeword.model import Model
     import openwakeword
-
     try:
         openwakeword.utils.download_models()
     except Exception:
         pass
-    print(f"[listen] loading wake model '{WAKE}' + STT '{STT_MODEL}' ...", flush=True)
-    oww = Model(wakeword_models=[WAKE], inference_framework="onnx")
-
-    from faster_whisper import WhisperModel
-    stt = WhisperModel(STT_MODEL, device="cpu", compute_type="int8")
-    print(f"[listen] ready. Say '{WAKE.replace('_', ' ')}'.", flush=True)
-
-    stream = sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=FRAME)
-    stream.start()
-
-    def read_frame():
-        data, _ = stream.read(FRAME)
-        return data[:, 0]
-
+    oww = Model(wakeword_models=[OWW_MODEL], inference_framework="onnx")
+    print(f"[listen] openWakeWord mode — say '{OWW_MODEL.replace('_', ' ')}'.", flush=True)
     while True:
-        frame = read_frame()
-        scores = oww.predict(frame)
-        if scores.get(WAKE, 0.0) < WAKE_THRESHOLD:
+        if oww.predict(mic.frame()).get(OWW_MODEL, 0.0) < OWW_THRESHOLD:
             continue
-
-        # --- wake! barge-in any current speech, acknowledge, capture the turn ---
         oww.reset()
         daemon("/stop")
         cue()
-        buf = [read_frame()]
-        t0 = time.time()
-        last_voice = time.time()
-        while True:
-            f = read_frame()
-            buf.append(f)
-            rms = float(np.sqrt(np.mean(f.astype(np.float32) ** 2)))
-            now = time.time()
-            if rms > SILENCE_RMS:
-                last_voice = now
-            if now - last_voice > SILENCE_HANG or now - t0 > MAX_TURN:
-                break
-
-        audio = np.concatenate(buf).astype(np.float32) / 32768.0
-        segments, _ = stt.transcribe(audio, language="en", vad_filter=True)
-        text = " ".join(s.text for s in segments).strip()
-        if not text:
-            continue
-        print(f"[you] {text}", flush=True)
-
-        if muted():
-            continue
-        reply = ask_brain(text)
-        if reply:
-            print(f"[claudia] {reply}", flush=True)
-            daemon("/say", {"text": reply})       # verbatim — brain already wrote spoken prose
-        # give playback a beat before re-arming the wake word (avoid self-trigger)
-        time.sleep(0.4)
+        respond(transcribe(stt, mic.capture_utterance()))
         oww.reset()
+
+
+def main():
+    print(f"[listen] loading STT '{STT_MODEL}' ...", flush=True)
+    from faster_whisper import WhisperModel
+    stt = WhisperModel(STT_MODEL, device="cpu", compute_type="int8")
+    mic = Mic()
+    (run_oww if WAKE_MODE == "oww" else run_keyword)(mic, stt)
 
 
 if __name__ == "__main__":
