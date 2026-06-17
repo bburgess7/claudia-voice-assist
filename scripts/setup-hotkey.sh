@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 [ -x "$ROOT/.venv-listen/bin/python" ] || { echo "Run scripts/setup-listen.sh first (needs the mic/STT venv)."; exit 1; }
-./.venv-listen/bin/python -m pip -q install pynput >/dev/null
+./.venv-listen/bin/python -m pip -q install pynput pyobjc-framework-Cocoa pyobjc-framework-Quartz >/dev/null
 pkill -f "talk_hotkey.py" 2>/dev/null || true
 nohup ./.venv-listen/bin/python hotkey/talk_hotkey.py >"$HOME/.claudia/logs/hotkey.log" 2>&1 &
 echo "✅ Hotkey daemon launched. Default key: RIGHT COMMAND (⌘)."

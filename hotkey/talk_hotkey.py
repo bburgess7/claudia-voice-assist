@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Global push-to-talk hotkey for Claudia. Works in ANY app.
+"""Global push-to-talk hotkey for Claudia — default key: BACKTICK ` (the Discord/gaming PTT key).
 
-  HOLD the hotkey  -> records while held, RELEASE sends it (push-to-talk).
-  DOUBLE-TAP it    -> toggles hands-free CONVERSATION mode (she listens, you talk, she replies,
-                      and it keeps going turn after turn until you double-tap again).
+  HOLD `         -> records while held, RELEASE sends it (push-to-talk).
+  DOUBLE-TAP `   -> toggles hands-free CONVERSATION mode (talk, she replies, repeat; double-tap to stop).
+  SINGLE tap `   -> types a normal backtick (re-injected), so you can still use it.
 
-Audio is captured locally and sent to the daemon's /talk (local Whisper -> agent -> speaks). Nothing
-leaves your Mac. Default hotkey: RIGHT OPTION (⌥). Change with CLAUDIA_HOTKEY (a pynput key name).
+Smart conflict avoidance: when your FRONTMOST app is a code editor or terminal, ` is passed straight
+through and types normally — so code fences ``` are never hijacked. Talk-mode only applies outside
+those apps. Audio is captured locally and sent to /talk (local Whisper -> agent -> speaks). Nothing
+leaves your Mac.
 
-Requires Accessibility permission for the terminal/app that launches it
-(System Settings → Privacy & Security → Accessibility). Run: bash scripts/setup-hotkey.sh
+Uses a Quartz event tap (selective key consumption), so it needs ACCESSIBILITY permission for the app
+that launches it. Run: bash scripts/setup-hotkey.sh.  Override key with CLAUDIA_HOTKEY_KEYCODE.
 """
-import io
+import json
 import os
 import subprocess
 import sys
@@ -22,20 +24,22 @@ import wave
 
 import numpy as np
 import sounddevice as sd
-from pynput import keyboard
+import Quartz
+from AppKit import NSWorkspace
 
 DAEMON = os.environ.get("CLAUDIA_URL", "http://127.0.0.1:4242")
-# Right Command by default: it's on the MacBook keyboard and (unlike Right Option) doesn't type
-# accented characters when held alone. Override with CLAUDIA_HOTKEY (any pynput Key name, e.g. alt_r).
-HOTKEY_NAME = os.environ.get("CLAUDIA_HOTKEY", "cmd_r")
-HOLD_THRESHOLD = 0.35      # held longer than this = push-to-talk; shorter = a tap
-DOUBLE_TAP = 0.40          # two taps within this window = toggle conversation
+KEYCODE = int(os.environ.get("CLAUDIA_HOTKEY_KEYCODE", "50"))   # 50 = grave/backtick on US layout
+HOLD_THRESHOLD = 0.35
+DOUBLE_TAP = 0.40
 SR = 16000
 SILENCE_RMS = 350
 SILENCE_HANG = 0.9
 MAX_TURN = 12.0
 
-HOTKEY = getattr(keyboard.Key, HOTKEY_NAME, keyboard.Key.alt_r)
+# When one of these is frontmost, ` types normally (don't hijack code fences / shell).
+EDITOR_HINTS = ("cursor", "code", "visual studio", "terminal", "iterm", "warp", "xcode",
+                "pycharm", "intellij", "webstorm", "sublime", "nova", "zed", "hyper", "kitty",
+                "alacritty", "ghostty")
 
 
 def cue(sound="Tink"):
@@ -43,14 +47,14 @@ def cue(sound="Tink"):
 
 
 def wav_bytes(int16: np.ndarray) -> bytes:
-    buf = io.BytesIO()
+    buf = __import__("io").BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR); w.writeframes(int16.tobytes())
     return buf.getvalue()
 
 
 def send_to_claudia(int16: np.ndarray):
-    if int16.size < SR // 3:            # < ~0.3s, ignore
+    if int16.size < SR // 3:
         return
     try:
         req = urllib.request.Request(DAEMON + "/talk", data=wav_bytes(int16),
@@ -63,18 +67,14 @@ def send_to_claudia(int16: np.ndarray):
 def daemon_speaking() -> bool:
     try:
         with urllib.request.urlopen(DAEMON + "/health", timeout=3) as r:
-            import json
             return bool(json.loads(r.read()).get("speaking"))
     except Exception:
         return False
 
 
 class Recorder:
-    """One always-open input stream; toggle `active` to capture into a buffer."""
     def __init__(self):
-        self.frames = []
-        self.active = False
-        self._lock = threading.Lock()
+        self.frames, self.active, self._lock = [], False, threading.Lock()
         self.stream = sd.InputStream(samplerate=SR, channels=1, dtype="int16",
                                      blocksize=1280, callback=self._cb)
         self.stream.start()
@@ -95,10 +95,8 @@ class Recorder:
             return np.concatenate(self.frames) if self.frames else np.zeros(0, dtype="int16")
 
     def record_until_silence(self) -> np.ndarray:
-        """Used in conversation mode: capture one spoken turn (waits for speech, ends on silence)."""
         self.start()
-        t0 = time.time()
-        last_voice = None
+        t0, last_voice = time.time(), None
         while True:
             time.sleep(0.08)
             with self._lock:
@@ -110,70 +108,88 @@ class Recorder:
             now = time.time()
             if last_voice and now - last_voice > SILENCE_HANG:
                 break
-            if last_voice is None and now - t0 > 6:      # no speech at all -> give up this turn
-                break
-            if now - t0 > MAX_TURN:
+            if (last_voice is None and now - t0 > 6) or now - t0 > MAX_TURN:
                 break
         return self.stop()
 
 
-class HotkeyApp:
+def _frontmost_is_editor() -> bool:
+    try:
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        name = (app.localizedName() or "").lower()
+        return any(h in name for h in EDITOR_HINTS)
+    except Exception:
+        return False
+
+
+class Hotkey:
     def __init__(self):
         self.rec = Recorder()
-        self.down_at = 0.0
         self.is_down = False
-        self.holding = False
+        self.down_at = 0.0
         self.last_tap = 0.0
         self.conversation = False
-        self._conv_thread = None
-        print(f"[hotkey] ready. HOLD {HOTKEY_NAME} to talk; DOUBLE-TAP for conversation mode.", flush=True)
+        self._passthrough = 0   # count of our own re-injected ` events to let through
 
-    def on_press(self, key):
-        if key != HOTKEY or self.is_down:
-            return
-        self.is_down = True
-        self.down_at = time.time()
-        if not self.conversation:
-            self.holding = True
-            self.rec.start()            # begin capturing; we decide on release if it was a hold
+    def _reinject_grave(self):
+        self._passthrough = 2
+        for down in (True, False):
+            e = Quartz.CGEventCreateKeyboardEvent(None, KEYCODE, down)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
 
-    def on_release(self, key):
-        if key != HOTKEY or not self.is_down:
-            return
-        self.is_down = False
-        dur = time.time() - self.down_at
-        if self.holding:
-            audio = self.rec.stop()
-            self.holding = False
-            if dur >= HOLD_THRESHOLD:    # a real hold -> push-to-talk, send it
-                cue("Pop")
-                threading.Thread(target=send_to_claudia, args=(audio,), daemon=True).start()
-                return
-        # short press => a tap; check for double-tap
-        now = time.time()
-        if now - self.last_tap < DOUBLE_TAP:
-            self.toggle_conversation()
-            self.last_tap = 0.0
-        else:
-            self.last_tap = now
+    def callback(self, proxy, type_, event, refcon):
+        try:
+            keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
+        except Exception:
+            return event
+        if keycode != KEYCODE:
+            return event
+        if self._passthrough > 0:                       # our own re-injected backtick — let it type
+            self._passthrough -= 1
+            return event
+        if not self.conversation and _frontmost_is_editor():
+            return event                                # in an editor/terminal: ` types normally
+
+        if type_ == Quartz.kCGEventKeyDown:
+            if not self.is_down:
+                self.is_down = True
+                self.down_at = time.time()
+                if not self.conversation:
+                    self.rec.start()
+            return None                                 # consume
+
+        if type_ == Quartz.kCGEventKeyUp:
+            self.is_down = False
+            dur = time.time() - self.down_at
+            if not self.conversation:
+                audio = self.rec.stop()
+                if dur >= HOLD_THRESHOLD:                # held -> push-to-talk
+                    cue("Pop")
+                    threading.Thread(target=send_to_claudia, args=(audio,), daemon=True).start()
+                    return None
+            now = time.time()
+            if now - self.last_tap < DOUBLE_TAP:         # double-tap -> conversation toggle
+                self.last_tap = 0.0
+                self.toggle_conversation()
+            else:
+                self.last_tap = now
+                if not self.conversation:
+                    self._reinject_grave()               # single tap -> actually type a backtick
+            return None
+        return event
 
     def toggle_conversation(self):
+        self.conversation = not self.conversation
         if self.conversation:
-            self.conversation = False
-            cue("Submarine")
-            print("[hotkey] conversation mode OFF", flush=True)
+            cue("Glass"); print("[hotkey] conversation ON — just talk", flush=True)
+            threading.Thread(target=self._conversation_loop, daemon=True).start()
         else:
-            self.conversation = True
-            cue("Glass")
-            print("[hotkey] conversation mode ON — just talk", flush=True)
-            self._conv_thread = threading.Thread(target=self._conversation_loop, daemon=True)
-            self._conv_thread.start()
+            cue("Submarine"); print("[hotkey] conversation OFF", flush=True)
 
     def _conversation_loop(self):
         while self.conversation:
             if daemon_speaking():
-                time.sleep(0.3)
-                continue
+                time.sleep(0.3); continue
             audio = self.rec.record_until_silence()
             if not self.conversation:
                 break
@@ -184,20 +200,24 @@ class HotkeyApp:
                     time.sleep(0.2)
 
     def run(self):
-        try:
-            from ApplicationServices import AXIsProcessTrusted
-            if not AXIsProcessTrusted():
-                print("[hotkey] ⚠️  Accessibility permission NOT granted for this app — keys won't be "
-                      "seen. Grant it in System Settings → Privacy & Security → Accessibility, then "
-                      "restart this.", flush=True)
-        except Exception:
-            pass
-        with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as listener:
-            listener.join()
+        mask = Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown) | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
+        tap = Quartz.CGEventTapCreate(
+            Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
+            Quartz.kCGEventTapOptionDefault, mask, self.callback, None)
+        if not tap:
+            print("[hotkey] ⚠️  Could not create the key tap — grant ACCESSIBILITY permission to this "
+                  "app (System Settings → Privacy & Security → Accessibility), then restart.", flush=True)
+            return
+        src = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+        Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), src, Quartz.kCFRunLoopCommonModes)
+        Quartz.CGEventTapEnable(tap, True)
+        print("[hotkey] ready. HOLD ` to talk; DOUBLE-TAP ` for conversation. (` types normally in "
+              "editors/terminals.)", flush=True)
+        Quartz.CFRunLoopRun()
 
 
 if __name__ == "__main__":
     try:
-        HotkeyApp().run()
+        Hotkey().run()
     except KeyboardInterrupt:
         sys.exit(0)
