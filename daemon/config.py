@@ -15,6 +15,7 @@ DEFAULTS: Dict[str, Any] = {
     "rate": 1.0,                # speaking-rate multiplier, 0.5 (slow) .. 2.0 (fast)
     "verbosity": "summary",     # verbatim | summary | headline — how much to read
     "muted": False,             # global on/off for speaking
+    "call_guard": True,         # auto-stay-silent while you're in a call (no surprise interruptions)
     "summarizer_model": "llama3.2:3b",  # local Ollama model for the spoken filter
     "agent_model": "qwen3-vl:30b",       # local Ollama tool-calling model for agentic /ask requests
     "wake_word": "hey claudia",

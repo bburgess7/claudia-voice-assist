@@ -7,13 +7,38 @@ and stops in-progress playback (used by the wake word / push-to-talk barge-in).
 from __future__ import annotations
 
 import queue
+import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
 from . import config
 from . import summarizer
 from .engines import get_engine
+
+# Processes that exist only DURING an active call/meeting (permission-free signal — no Accessibility).
+#   CptHost = Zoom while in a meeting.  Add others as needed.
+_CALL_PROCS = ["CptHost"]
+_call_cache = {"t": 0.0, "v": False}
+
+
+def in_call() -> bool:
+    """Best-effort 'are you on a call right now' check, cached ~2s. Conservative: only true when a
+    known in-meeting process is running. The manual mute is the guaranteed control."""
+    now = time.time()
+    if now - _call_cache["t"] < 2.0:
+        return _call_cache["v"]
+    v = False
+    try:
+        for p in _CALL_PROCS:
+            if subprocess.run(["pgrep", "-x", p], capture_output=True).returncode == 0:
+                v = True
+                break
+    except Exception:
+        pass
+    _call_cache.update(t=now, v=v)
+    return v
 
 
 @dataclass
@@ -61,6 +86,11 @@ class SpeechManager:
         while True:
             item = self._q.get()
             if item is None:
+                continue
+            # No surprises: stay silent while you're on a call (manual mute always wins too).
+            if config.get("call_guard") and in_call():
+                if self.on_idle:
+                    self.on_idle()
                 continue
             engine = get_engine(config.get("engine"))
             self.speaking = True
