@@ -451,21 +451,31 @@ $("#sayBtn").addEventListener("click",()=>{ const v=$("#sayText").value; speak(v
 $("#sayText").addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){ $("#sayBtn").click(); }});
 $("#stopBtn").addEventListener("click",stopSpeak);
 
-/* ---------- tap to talk: browser speech -> Claudia's agent (she acts on the Mac) ---------- */
-async function ask(text){ if(!text.trim())return; pushLine("You: " + text);
-  await fetch(api("/ask"),{method:"POST",headers:hdrs(),body:JSON.stringify({text})}); }
-const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec, listening=false;
-$("#talkBtn").addEventListener("click", ()=>{
-  if(!Rec){ alert("This browser can't do speech input. On the Mac, use the private local loop: run scripts/listen.sh and say 'hey claudia'."); return; }
-  if(listening){ try{ rec.stop(); }catch(e){} return; }
-  rec = new Rec(); rec.lang="en-US"; rec.interimResults=false; rec.maxAlternatives=1;
-  rec.onstart=()=>{ listening=true; $("#talkBtn").classList.add("listening"); $("#talkBtn").textContent="● Listening… tap to stop"; };
-  rec.onend=()=>{ listening=false; $("#talkBtn").classList.remove("listening"); $("#talkBtn").textContent="🎤 Tap to talk"; };
-  rec.onerror=()=>{ listening=false; $("#talkBtn").classList.remove("listening"); $("#talkBtn").textContent="🎤 Tap to talk"; };
-  rec.onresult=(e)=>{ ask(e.results[0][0].transcript); };
-  rec.start();
-});
+/* ---------- tap to talk: record audio -> YOUR Mac's local Whisper -> agent (private, no Google) ---------- */
+let mediaRec, chunks=[], talking=false, talkStream;
+function talkLabel(t, on){ $("#talkBtn").textContent=t; $("#talkBtn").classList.toggle("listening",!!on); }
+async function startTalk(){
+  try{ talkStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ talkLabel("🎤 Tap to talk"); pushLine("Microphone permission needed — allow it for this site, then tap again."); return; }
+  chunks=[]; mediaRec = new MediaRecorder(talkStream);
+  mediaRec.ondataavailable = e=>{ if(e.data && e.data.size) chunks.push(e.data); };
+  mediaRec.onstop = async ()=>{
+    talkStream.getTracks().forEach(t=>t.stop());
+    talkLabel("🎤 Thinking…");
+    const blob = new Blob(chunks, {type: mediaRec.mimeType || "audio/webm"});
+    try{
+      const h = SECRET ? {"x-claudia-secret":SECRET} : {};
+      const r = await fetch(api("/talk"), {method:"POST", headers:h, body: blob});
+      if(r.status===503){ pushLine("Local speech isn't set up yet — run  bash scripts/setup-listen.sh  on the Mac."); }
+      else { const d = await r.json(); if(d.heard) pushLine("You: " + d.heard);
+             else pushLine("(didn't catch that — try again)"); }
+    }catch(e){ pushLine("(couldn't reach Claudia)"); }
+    talkLabel("🎤 Tap to talk");
+  };
+  mediaRec.start(); talking=true; talkLabel("● Listening… tap to send", true);
+}
+function stopTalk(){ talking=false; if(mediaRec && mediaRec.state!=="inactive") mediaRec.stop(); }
+$("#talkBtn").addEventListener("click", ()=> talking ? stopTalk() : startTalk());
 
 /* ---------- connect screen (remote / Vercel only) ---------- */
 function showConnect(){ $("#connect").classList.add("show"); $("#cBase").value = BASE||""; $("#cSecret").value = SECRET||""; }

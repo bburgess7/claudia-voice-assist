@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 from typing import List, Optional
 
 from fastapi import (FastAPI, WebSocket, WebSocketDisconnect, Request, Header, HTTPException,
                      Depends)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -136,18 +138,49 @@ async def stop():
     return {"ok": True}
 
 
-@app.post("/ask", dependencies=[Depends(require_secret)])
-async def ask(body: SpeakBody):
-    """Agentic: Claudia uses tools to DO something, then speaks the result."""
+STT_URL = os.environ.get("CLAUDIA_STT_URL", "http://127.0.0.1:4245")
+
+
+def _run_agent(text: str):
     model = config.get("agent_model")
 
     def on_step(name, args):
         _broadcast({"type": "action", "tool": name, "args": args})
 
-    result = await asyncio.to_thread(agent.run_agent, body.text, model, on_step)
+    result = agent.run_agent(text, model, on_step)
     spoken = result.get("spoken", "")
     if spoken:
         speech.enqueue(spoken, mode="verbatim")   # agent already wrote spoken-ready prose
+    return result
+
+
+@app.post("/ask", dependencies=[Depends(require_secret)])
+async def ask(body: SpeakBody):
+    """Agentic: Claudia uses tools to DO something, then speaks the result."""
+    return await asyncio.to_thread(_run_agent, body.text)
+
+
+@app.post("/talk", dependencies=[Depends(require_secret)])
+async def talk(request: Request):
+    """Voice in: raw audio -> local Whisper STT -> agent -> spoken result. Fully on-device."""
+    import urllib.request as _u
+    audio = await request.body()
+
+    def _stt():
+        req = _u.Request(STT_URL + "/stt", data=audio, headers={"Content-Type": "application/octet-stream"})
+        with _u.urlopen(req, timeout=60) as r:
+            return json.loads(r.read()).get("text", "")
+    try:
+        heard = await asyncio.to_thread(_stt)
+    except Exception:
+        return JSONResponse({"error": "stt_unavailable",
+                             "hint": "Run: bash scripts/setup-listen.sh (sets up local speech-to-text)"},
+                            status_code=503)
+    if not heard.strip():
+        return {"heard": "", "spoken": ""}
+    _broadcast({"type": "heard", "text": heard})
+    result = await asyncio.to_thread(_run_agent, heard)
+    result["heard"] = heard
     return result
 
 

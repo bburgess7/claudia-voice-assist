@@ -15,6 +15,14 @@ CLAUDIA_KOKORO_PORT="$KOKORO_PORT" "$ROOT/.venv-kokoro/bin/python" \
   "$ROOT/engines_sidecar/kokoro_server.py" >"$LOGDIR/kokoro.log" 2>&1 &
 echo $! > "$HOME/.claudia/kokoro.pid"
 
+# optional local speech-to-text sidecar (powers private "tap to talk"), if the listen venv exists
+if [ -x "$ROOT/.venv-listen/bin/python" ]; then
+  echo "[claudia] starting local STT sidecar on :4245 ..."
+  "$ROOT/.venv-listen/bin/python" "$ROOT/engines_sidecar/stt_server.py" \
+    >"$LOGDIR/stt.log" 2>&1 &
+  echo $! > "$HOME/.claudia/stt.pid"
+fi
+
 # wait for the sidecar to load its model
 for i in $(seq 1 60); do
   if curl -sf "http://127.0.0.1:$KOKORO_PORT/health" >/dev/null 2>&1; then
