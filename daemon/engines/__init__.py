@@ -28,11 +28,19 @@ def get_engine(name: str) -> TTSEngine:
 
 
 def available() -> list:
+    """macos_say is always available; neural engines are listed only if their sidecar answers."""
+    import os
+    import urllib.request
     names = ["macos_say"]
-    for opt in ("kokoro", "kyutai"):
+    sidecars = {
+        "kokoro": os.environ.get("CLAUDIA_KOKORO_URL", "http://127.0.0.1:4243"),
+        "kyutai": os.environ.get("CLAUDIA_KYUTAI_URL", "http://127.0.0.1:4244"),
+    }
+    for name, url in sidecars.items():
         try:
-            __import__("daemon.engines." + opt, fromlist=[opt])
-            names.append(opt)
+            with urllib.request.urlopen(url + "/health", timeout=0.6) as r:
+                if r.status == 200:
+                    names.append(name)
         except Exception:
             pass
     return names
