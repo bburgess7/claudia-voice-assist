@@ -42,6 +42,17 @@ EDITOR_HINTS = ("cursor", "code", "visual studio", "terminal", "iterm", "warp", 
                 "alacritty", "ghostty")
 
 
+DEBUG = os.environ.get("CLAUDIA_HOTKEY_DEBUG", "0") == "1"
+
+
+def _dbg(msg):
+    try:
+        with open(os.path.expanduser("~/.claudia/logs/hotkey-debug.log"), "a") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+
+
 def cue(sound="Tink"):
     subprocess.run(["afplay", f"/System/Library/Sounds/{sound}.aiff"], stderr=subprocess.DEVNULL)
 
@@ -55,13 +66,19 @@ def wav_bytes(int16: np.ndarray) -> bytes:
 
 def send_to_claudia(int16: np.ndarray):
     if int16.size < SR // 3:
+        _dbg("send: audio too short, skipped")
         return
     try:
         req = urllib.request.Request(DAEMON + "/talk", data=wav_bytes(int16),
                                      headers={"Content-Type": "application/octet-stream"})
-        urllib.request.urlopen(req, timeout=180).read()
+        body = urllib.request.urlopen(req, timeout=180).read()
+        try:
+            r = __import__("json").loads(body)
+            _dbg(f"talk: heard={r.get('heard')!r} spoken={r.get('spoken')!r}")
+        except Exception:
+            _dbg(f"talk raw response: {body[:200]}")
     except Exception as e:
-        print("send error:", e, flush=True)
+        _dbg(f"send error: {e}")
 
 
 def daemon_speaking() -> bool:
@@ -165,6 +182,8 @@ class Hotkey:
             keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
         except Exception:
             return event
+        if DEBUG and type_ == Quartz.kCGEventKeyDown:
+            _dbg(f"keydown keycode={keycode} (hotkey is {KEYCODE}) frontmost_editor={_frontmost_is_editor()}")
         if keycode != KEYCODE:
             return event
         if self._passthrough > 0:                       # our own re-injected backtick — let it type
@@ -186,6 +205,9 @@ class Hotkey:
             dur = time.time() - self.down_at
             if not self.conversation:
                 audio = self.rec.stop()
+                if DEBUG:
+                    _dbg(f"keyUP dur={dur:.2f}s audio_samples={audio.size} -> "
+                         f"{'HOLD/SEND' if dur >= HOLD_THRESHOLD else 'tap'}")
                 if dur >= HOLD_THRESHOLD:                # held -> push-to-talk
                     cue("Pop")
                     threading.Thread(target=send_to_claudia, args=(audio,), daemon=True).start()
