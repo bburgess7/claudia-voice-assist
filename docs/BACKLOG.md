@@ -27,5 +27,16 @@ Captured from Ben's feedback; not yet built (or only partially).
 
 ## Access / deploy (needs Ben's accounts)
 - [ ] Cloudflare Access + Google SSO deploy (docs/SSO-SETUP.md) — needs a dedicated CF domain.
+- [ ] **Cloudflare SSO deploy — NEXT UP (reminder on calendar: Wed Jun 18, 9:00 AM).** Decision: use a
+      SPARE domain moved to Cloudflare (free; not clawdiaventures—Resend email). Ben to: add the spare
+      domain to Cloudflare (dash → Add a domain → Free → switch nameservers), then give Claude the
+      domain + the Google email to allow-list. Once "Active": Claude runs `cloudflared tunnel login` +
+      create/route + Cloudflare Access (Google IdP) + wires daemon access_email/public_url/sso. See
+      docs/SSO-SETUP.md. (Then the phone scans the QR and signs in with Google — no secret to type.)
 - [ ] Publish to Rival.io (rival/PUBLISH.md) — needs Rival account.
 - [ ] Drop the Vercel dependency once SSO + daemon-served UI is live (daemon serves its own HUD).
+
+## Comms
+- No Discord webhook is actually configured (only token-monitor/.env.example). Reminders went to Google
+  Calendar instead. To use Discord for future alerts, create a channel webhook and drop the URL in
+  ~/tools/token-monitor/.env (or tell Claude) — preferred per user.
