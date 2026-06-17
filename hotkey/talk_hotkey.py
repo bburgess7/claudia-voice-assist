@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Global push-to-talk hotkey for Claudia — default key: BACKTICK ` (the Discord/gaming PTT key).
+"""Global push-to-talk hotkey for Claudia — default key: RIGHT COMMAND ⌘ (a non-text modifier).
 
-  HOLD `         -> records while held, RELEASE sends it (push-to-talk).
-  DOUBLE-TAP `   -> toggles hands-free CONVERSATION mode (talk, she replies, repeat; double-tap to stop).
-  SINGLE tap `   -> types a normal backtick (re-injected), so you can still use it.
+  HOLD the key   -> records while held, RELEASE sends it (push-to-talk).
+  DOUBLE-TAP it  -> toggles hands-free CONVERSATION mode (talk, she replies, repeat; double-tap to stop).
 
-Smart conflict avoidance: when your FRONTMOST app is a code editor or terminal, ` is passed straight
-through and types normally — so code fences ``` are never hijacked. Talk-mode only applies outside
-those apps. Audio is captured locally and sent to /talk (local Whisper -> agent -> speaks). Nothing
-leaves your Mac.
+A modifier held alone produces NO text and has no side effects — so there's nothing to hijack and no
+editor conflicts (unlike a text key such as backtick). Audio is captured locally and sent to /talk
+(local Whisper -> agent -> speaks). Nothing leaves your Mac.
 
-Uses a Quartz event tap (selective key consumption), so it needs ACCESSIBILITY permission for the app
-that launches it. Run: bash scripts/setup-hotkey.sh.  Override key with CLAUDIA_HOTKEY_KEYCODE.
+Choose the key with CLAUDIA_HOTKEY: cmd_r (default), alt_r, ctrl_r, shift_r, fn, cmd_l. Note: `fn`
+usually triggers macOS Dictation, so avoid it if you dictate. For a raw text key instead, set
+CLAUDIA_HOTKEY_KEYCODE (e.g. 50 = backtick) — that path adds editor-passthrough + re-injection.
+
+Uses a Quartz event tap, so it needs ACCESSIBILITY permission for the app that launches it.
+Run: bash scripts/setup-hotkey.sh.
 """
 import json
 import os
@@ -28,7 +30,26 @@ import Quartz
 from AppKit import NSWorkspace
 
 DAEMON = os.environ.get("CLAUDIA_URL", "http://127.0.0.1:4242")
-KEYCODE = int(os.environ.get("CLAUDIA_HOTKEY_KEYCODE", "50"))   # 50 = grave/backtick on US layout
+
+# Non-text MODIFIER keys (held alone -> no typing, no side effects). Detected via flagsChanged, never
+# consumed. This is the clean default. name -> (keycode, flag-mask).
+MODIFIERS = {
+    "cmd_r": (54, Quartz.kCGEventFlagMaskCommand),
+    "cmd_l": (55, Quartz.kCGEventFlagMaskCommand),
+    "alt_r": (61, Quartz.kCGEventFlagMaskAlternate),
+    "alt_l": (58, Quartz.kCGEventFlagMaskAlternate),
+    "ctrl_r": (62, Quartz.kCGEventFlagMaskControl),
+    "shift_r": (60, Quartz.kCGEventFlagMaskShift),
+    "fn": (63, Quartz.kCGEventFlagMaskSecondaryFn),
+}
+HOTKEY_NAME = os.environ.get("CLAUDIA_HOTKEY", "cmd_r")          # default: Right Command (non-text)
+_kc_override = os.environ.get("CLAUDIA_HOTKEY_KEYCODE")          # advanced: a raw text-key keycode
+if _kc_override:
+    MODIFIER_MODE, KEYCODE, MOD_FLAG = False, int(_kc_override), 0
+elif HOTKEY_NAME in MODIFIERS:
+    MODIFIER_MODE, (KEYCODE, MOD_FLAG) = True, MODIFIERS[HOTKEY_NAME]
+else:
+    MODIFIER_MODE, KEYCODE, MOD_FLAG = False, 50, 0              # fall back to backtick
 HOLD_THRESHOLD = 0.35
 DOUBLE_TAP = 0.40
 SR = 16000
@@ -177,49 +198,63 @@ class Hotkey:
             e = Quartz.CGEventCreateKeyboardEvent(None, KEYCODE, down)
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
 
+    def _press(self):
+        if not self.is_down:
+            self.is_down = True
+            self.down_at = time.time()
+            if not self.conversation:
+                self.rec.start()
+
+    def _release(self, reinject=False):
+        self.is_down = False
+        dur = time.time() - self.down_at
+        if not self.conversation:
+            audio = self.rec.stop()
+            if DEBUG:
+                _dbg(f"release dur={dur:.2f}s samples={audio.size} -> "
+                     f"{'HOLD/SEND' if dur >= HOLD_THRESHOLD else 'tap'}")
+            if dur >= HOLD_THRESHOLD:                    # held -> push-to-talk
+                cue("Pop")
+                threading.Thread(target=send_to_claudia, args=(audio,), daemon=True).start()
+                return
+        now = time.time()
+        if now - self.last_tap < DOUBLE_TAP:             # double-tap -> conversation toggle
+            self.last_tap = 0.0
+            self.toggle_conversation()
+        else:
+            self.last_tap = now
+            if reinject and not self.conversation:
+                self._reinject_grave()                   # text-key only: a tap types the char
+
     def callback(self, proxy, type_, event, refcon):
         try:
             keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
         except Exception:
             return event
-        if DEBUG and type_ == Quartz.kCGEventKeyDown:
-            _dbg(f"keydown keycode={keycode} (hotkey is {KEYCODE}) frontmost_editor={_frontmost_is_editor()}")
+
+        if MODIFIER_MODE:                                # clean path: a modifier held alone
+            if type_ != Quartz.kCGEventFlagsChanged or keycode != KEYCODE:
+                return event
+            down = bool(Quartz.CGEventGetFlags(event) & MOD_FLAG)
+            if down and not self.is_down:
+                self._press()
+            elif not down and self.is_down:
+                self._release()
+            return event                                 # never consume a modifier
+
+        # ---- text-key mode (e.g. backtick) — needs editor passthrough + re-injection ----
         if keycode != KEYCODE:
             return event
-        if self._passthrough > 0:                       # our own re-injected backtick — let it type
+        if self._passthrough > 0:
             self._passthrough -= 1
             return event
         if not self.conversation and _frontmost_is_editor():
-            return event                                # in an editor/terminal: ` types normally
-
+            return event                                 # in an editor/terminal: key types normally
         if type_ == Quartz.kCGEventKeyDown:
-            if not self.is_down:
-                self.is_down = True
-                self.down_at = time.time()
-                if not self.conversation:
-                    self.rec.start()
-            return None                                 # consume
-
+            self._press()
+            return None
         if type_ == Quartz.kCGEventKeyUp:
-            self.is_down = False
-            dur = time.time() - self.down_at
-            if not self.conversation:
-                audio = self.rec.stop()
-                if DEBUG:
-                    _dbg(f"keyUP dur={dur:.2f}s audio_samples={audio.size} -> "
-                         f"{'HOLD/SEND' if dur >= HOLD_THRESHOLD else 'tap'}")
-                if dur >= HOLD_THRESHOLD:                # held -> push-to-talk
-                    cue("Pop")
-                    threading.Thread(target=send_to_claudia, args=(audio,), daemon=True).start()
-                    return None
-            now = time.time()
-            if now - self.last_tap < DOUBLE_TAP:         # double-tap -> conversation toggle
-                self.last_tap = 0.0
-                self.toggle_conversation()
-            else:
-                self.last_tap = now
-                if not self.conversation:
-                    self._reinject_grave()               # single tap -> actually type a backtick
+            self._release(reinject=True)
             return None
         return event
 
@@ -247,7 +282,9 @@ class Hotkey:
     def install(self, runloop=None) -> bool:
         """Create the key tap and add it to a run loop (default: the MAIN loop, so it can be hosted
         inside a menu-bar app). Returns True if the tap was created (i.e. Accessibility is granted)."""
-        mask = Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown) | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
+        mask = (Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
+                | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
+                | Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged))   # flagsChanged = modifier keys
         tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
             Quartz.kCGEventTapOptionDefault, mask, self.callback, None)
