@@ -65,23 +65,39 @@ def last_assistant_text(transcript_path):
     return text.strip()
 
 
+def project_name(data):
+    """Which project/terminal fired this hook, from the session's working directory."""
+    cwd = (data.get("cwd") or "").rstrip("/")
+    if cwd:
+        return os.path.basename(cwd)
+    # fallback: ~/.claude/projects/<encoded-cwd>/<session>.jsonl  (cwd with / replaced by -)
+    enc = os.path.basename(os.path.dirname(data.get("transcript_path") or ""))
+    if not enc:
+        return ""
+    for root in ("-dev-", "-tools-", "-Projects-", "-Downloads-"):   # repo roots -> keep the tail
+        if root in enc:
+            return enc.split(root, 1)[1]
+    return enc.rstrip("-").split("-")[-1]
+
+
 def main():
     try:
         data = json.load(sys.stdin)
     except Exception:
         return
     event = data.get("hook_event_name", "")
+    project = project_name(data)
 
     if event == "Notification":
         msg = data.get("message", "").strip()
         if msg:
-            post("/speak", {"text": msg, "mode": "headline"})
+            post("/speak", {"text": msg, "mode": "headline", "prefix": project})
         return
 
     if event == "Stop":
         text = last_assistant_text(data.get("transcript_path", ""))
         if text:
-            post("/speak", {"text": text, "mode": "summary"})
+            post("/speak", {"text": text, "mode": "summary", "prefix": project})
         return
 
 

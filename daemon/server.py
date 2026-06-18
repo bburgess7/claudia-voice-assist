@@ -80,7 +80,8 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 
 class SpeakBody(BaseModel):
     text: str
-    mode: Optional[str] = None  # verbatim | summary | headline; default = config.verbosity
+    mode: Optional[str] = None    # verbatim | summary | headline; default = config.verbosity
+    prefix: Optional[str] = None  # spoken first, unsummarized (e.g. which project a Claude hook fired from)
 
 
 def _broadcast(payload: dict, role: Optional[str] = None) -> None:
@@ -122,7 +123,7 @@ async def health():
 
 @app.post("/speak", dependencies=[Depends(require_secret)])
 async def speak(body: SpeakBody):
-    spoken = speech.enqueue(body.text, body.mode)
+    spoken = speech.enqueue(body.text, body.mode, body.prefix)
     return {"spoken": spoken}
 
 

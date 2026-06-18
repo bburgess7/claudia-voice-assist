@@ -61,8 +61,9 @@ class SpeechManager:
         self.on_idle: Optional[Callable[[], None]] = None
         self.has_remote: Callable[[], bool] = lambda: False
 
-    def enqueue(self, text: str, mode: Optional[str] = None) -> str:
-        """Summarize `text` per mode/verbosity and queue it. Returns the spoken text."""
+    def enqueue(self, text: str, mode: Optional[str] = None, prefix: Optional[str] = None) -> str:
+        """Summarize `text` per mode/verbosity and queue it. `prefix` (e.g. a project name) is spoken
+        first, unsummarized, so context like which project survives. Returns the spoken text."""
         cfg = config.all()
         if cfg.get("muted"):
             return ""
@@ -70,6 +71,8 @@ class SpeechManager:
         spoken = summarizer.to_speech(text, mode=mode, model=cfg.get("summarizer_model"))
         if not spoken.strip():
             return ""
+        if prefix and prefix.strip():
+            spoken = f"{prefix.strip()}. {spoken}"
         self._q.put(Utterance(text=spoken, raw=text, rate=float(cfg.get("rate", 1.0)),
                               voice=cfg.get("voice")))
         return spoken
