@@ -90,8 +90,8 @@ def main():
 
     if event == "Notification":
         msg = data.get("message", "").strip()
-        if msg:
-            post("/speak", {"text": msg, "mode": "headline", "prefix": project})
+        if msg:  # speak the notice as-is (don't reword a short, already-clean message)
+            post("/speak", {"text": msg, "mode": "verbatim", "prefix": project})
         return
 
     if event == "Stop":
