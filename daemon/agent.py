@@ -52,6 +52,33 @@ PERSONA = (
     "risky, say it needs confirmation instead of doing it.\n\n" + _context()
 )
 
+# Claudia's own editable instructions. She loads this into her brain every turn, and updates it via
+# the `remember` tool. This is how she changes her own behavior on your spoken instruction.
+PERSONA_FILE = os.path.expanduser("~/.claudia/persona.md")
+_PERSONA_HEADER = ("# Claudia's standing instructions\n"
+                   "# She appends to this when you tell her to remember something or change behavior.\n\n")
+
+
+def load_instructions() -> str:
+    try:
+        with open(PERSONA_FILE) as f:
+            lines = [ln for ln in f.read().splitlines()
+                     if ln.strip() and not ln.lstrip().startswith("#")]
+        return "\n".join(lines).strip()
+    except Exception:
+        return ""
+
+
+def system_prompt() -> str:
+    extra = load_instructions()
+    if not extra:
+        return PERSONA
+    # Put the standing orders LAST and frame them hard — small models weight the end of the prompt most.
+    return (PERSONA + "\n\nSTANDING ORDERS FROM BEN. These override your defaults and apply to EVERY "
+            "reply, including this one (how you address him, your tone, your length, your behavior). "
+            "Obey every one:\n" + extra)
+
+
 # Hard denylist — these are never executed, even if the model asks.
 _DANGER = re.compile(
     r"\b(rm\s+-rf|rm\s+-fr|\bsudo\b|\bdd\b|mkfs|:\(\)\s*\{|shutdown|reboot|halt|killall|"
@@ -88,6 +115,16 @@ TOOLS = [
                        "Calendar, etc.). Use for actions the shell can't do.",
         "parameters": {"type": "object",
                        "properties": {"script": {"type": "string"}}, "required": ["script"]}}},
+    {"type": "function", "function": {
+        "name": "remember",
+        "description": "Save a durable instruction that changes how you behave from now on. Call this "
+                       "whenever Ben tells you to remember something, change your behavior, adjust your "
+                       "tone, or update your instructions (e.g. 'always keep answers under two "
+                       "sentences', 'call me boss', 'check git before answering about code').",
+        "parameters": {"type": "object",
+                       "properties": {"note": {"type": "string",
+                                               "description": "the instruction to remember, one short line"}},
+                       "required": ["note"]}}},
 ]
 
 
@@ -143,6 +180,17 @@ def execute_tool(name: str, args: dict) -> str:
         if re.search(r"do shell script", script, re.I) and _DANGER.search(script):
             return "BLOCKED."
         return _run(["osascript", "-e", script])
+    if name == "remember":
+        note = (args.get("note") or "").strip().lstrip("-").strip()
+        if not note:
+            return "(nothing to remember)"
+        os.makedirs(os.path.dirname(PERSONA_FILE), exist_ok=True)
+        if not os.path.exists(PERSONA_FILE):
+            with open(PERSONA_FILE, "w") as f:
+                f.write(_PERSONA_HEADER)
+        with open(PERSONA_FILE, "a") as f:
+            f.write(f"- {note}\n")
+        return f"Saved. From now on, {note}"
     return f"(unknown tool {name})"
 
 
@@ -164,7 +212,7 @@ def _chat(model: str, messages: list) -> Optional[dict]:
 
 def run_agent(text: str, model: str = "llama3.2:3b", on_step=None) -> dict:
     """Run the agentic loop. Returns {spoken, actions: [{tool, args, result}]}."""
-    messages = [{"role": "system", "content": PERSONA}, {"role": "user", "content": text}]
+    messages = [{"role": "system", "content": system_prompt()}, {"role": "user", "content": text}]
     actions = []
     for _ in range(MAX_STEPS):
         msg = _chat(model, messages)
