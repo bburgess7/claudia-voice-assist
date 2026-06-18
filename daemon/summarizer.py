@@ -12,6 +12,7 @@ on the way in AND on the way out. Uses local Ollama if reachable; deterministic 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import urllib.request
@@ -110,6 +111,47 @@ def _ollama_chat(model: str, instruction: str, text: str, timeout: float = 20.0)
         return _PREAMBLE.sub("", out).strip().strip('"')
     except Exception:
         return None
+
+
+_LABEL_CACHE = {}
+
+
+def to_label(context: str, model: str = "llama3.2:3b") -> str:
+    """A short 2-4 word label for what a terminal session is working on, from its recent context.
+    Cached by context so repeated notifications in the same session don't re-ask the model."""
+    context = _redact((context or "").strip())
+    if len(context) < 8:
+        return ""
+    key = hashlib.md5(context.encode()).hexdigest()
+    if key in _LABEL_CACHE:
+        return _LABEL_CACHE[key]
+    body = json.dumps({
+        "model": model, "stream": False,
+        "messages": [
+            {"role": "system", "content": "Name what a coding session is about with a 2 to 4 word "
+             "lowercase noun phrase. No leading 'to', no leading verb, no punctuation, no markdown, "
+             "no preamble. Just the phrase."},
+            {"role": "user", "content": "fix the failing login tests"},
+            {"role": "assistant", "content": "login test fixes"},
+            {"role": "user", "content": "redesign the landing page hero with a bolder headline"},
+            {"role": "assistant", "content": "landing page redesign"},
+            {"role": "user", "content": context[:1500]},
+        ],
+        "options": {"temperature": 0.1, "num_predict": 12},
+    }).encode()
+    label = ""
+    try:
+        req = urllib.request.Request(OLLAMA_CHAT_URL, data=body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            out = json.loads(r.read()).get("message", {}).get("content", "").strip()
+        out = re.sub(r"[*_`\"#.]", "", out).strip().lower()
+        out = re.sub(r"^(this |the |a |an )?(session |work |task )?(is )?(about|on|for|to)\s+", "", out)
+        label = " ".join(out.split()[:4])
+    except Exception:
+        label = ""
+    _LABEL_CACHE[key] = label
+    return label
 
 
 def to_speech(text: str, mode: str = "summary", model: str = "llama3.2:3b") -> str:

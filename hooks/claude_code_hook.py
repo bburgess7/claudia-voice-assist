@@ -65,6 +65,37 @@ def last_assistant_text(transcript_path):
     return text.strip()
 
 
+def last_user_text(transcript_path):
+    """The most recent human-typed message in the session (what this terminal is working on)."""
+    if not transcript_path or not os.path.exists(transcript_path):
+        return ""
+    text = ""
+    try:
+        with open(transcript_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("type") != "user":
+                    continue
+                parts = row.get("message", {}).get("content", [])
+                if isinstance(parts, str):
+                    if parts.strip():
+                        text = parts
+                    continue
+                chunk = " ".join(p.get("text", "") for p in parts
+                                 if isinstance(p, dict) and p.get("type") == "text")
+                if chunk.strip():            # skip tool-result-only user rows
+                    text = chunk
+    except OSError:
+        return ""
+    return text.strip()
+
+
 def project_name(data):
     """Which project/terminal fired this hook, from the session's working directory."""
     cwd = (data.get("cwd") or "").rstrip("/")
@@ -87,17 +118,18 @@ def main():
         return
     event = data.get("hook_event_name", "")
     project = project_name(data)
+    context = last_user_text(data.get("transcript_path", ""))  # -> a "what's in this terminal" label
 
     if event == "Notification":
         msg = data.get("message", "").strip()
         if msg:  # speak the notice as-is (don't reword a short, already-clean message)
-            post("/speak", {"text": msg, "mode": "verbatim", "prefix": project})
+            post("/speak", {"text": msg, "mode": "verbatim", "prefix": project, "context": context})
         return
 
     if event == "Stop":
         text = last_assistant_text(data.get("transcript_path", ""))
         if text:
-            post("/speak", {"text": text, "mode": "summary", "prefix": project})
+            post("/speak", {"text": text, "mode": "summary", "prefix": project, "context": context})
         return
 
 

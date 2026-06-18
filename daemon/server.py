@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from . import config
 from . import agent
+from . import summarizer
 from .engines import get_engine, available
 from .speech import SpeechManager
 
@@ -80,8 +81,9 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 
 class SpeakBody(BaseModel):
     text: str
-    mode: Optional[str] = None    # verbatim | summary | headline; default = config.verbosity
-    prefix: Optional[str] = None  # spoken first, unsummarized (e.g. which project a Claude hook fired from)
+    mode: Optional[str] = None     # verbatim | summary | headline; default = config.verbosity
+    prefix: Optional[str] = None   # spoken first, unsummarized (e.g. which project a Claude hook fired from)
+    context: Optional[str] = None  # recent session context -> a short label, used as the spoken lead-in
 
 
 def _broadcast(payload: dict, role: Optional[str] = None) -> None:
@@ -123,7 +125,12 @@ async def health():
 
 @app.post("/speak", dependencies=[Depends(require_secret)])
 async def speak(body: SpeakBody):
-    spoken = speech.enqueue(body.text, body.mode, body.prefix)
+    prefix = body.prefix
+    if body.context:   # derive a short "what this terminal is doing" label, fall back to the project
+        label = await asyncio.to_thread(summarizer.to_label, body.context, config.get("summarizer_model"))
+        if label:
+            prefix = label
+    spoken = speech.enqueue(body.text, body.mode, prefix)
     return {"spoken": spoken}
 
 
